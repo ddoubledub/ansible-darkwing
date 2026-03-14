@@ -1,0 +1,38 @@
+---
+# =============================================================================
+# meta/main.yml
+# =============================================================================
+# Role metadata. Used by Ansible Galaxy and for dependency management.
+# You can leave this file minimal for private/internal roles.
+# =============================================================================
+
+galaxy_info:
+  author: Daniel Whall <dan@whall.me>
+  description: Brief one-line description of what this role does.
+  license: MIT
+
+  # Minimum Ansible version required
+  min_ansible_version: "2.14"
+
+  # Platforms this role supports. Used by Galaxy for filtering.
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy      # 22.04
+        - noble      # 24.04
+    - name: Debian
+      versions:
+        - bookworm   # 12
+    - name: EL        # RHEL / AlmaLinux / Rocky / Oracle
+      versions:
+        - "8"
+        - "9"
+
+# Role dependencies — other roles that must run before this one.
+# Leave empty if there are no dependencies.
+dependencies: []
+# Example:
+# dependencies:
+#   - role: some_other_role
+#     vars:
+#       some_var: value

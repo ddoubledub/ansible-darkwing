@@ -1,0 +1,45 @@
+*.retry
+.vault_pass
+.env
+__pycache__/
+*.log
+logs/
+GIT-*/
+*.bin
+*.deb
+*.rpm
+*.iso
+*.img
+*.zip
+ARCHIVE/
+# Schedule data and run logs written by the web GUI — content is runtime state
+.ansible-gui/schedules.json
+.ansible-gui/logs/
+
+# webgui runtime/secret files — users populate these locally, never commit
+webgui/saml/settings.json
+webgui/.env
+
+# ---------------------------------------------------------------
+# Personal content — keep framework skeleton only
+# ---------------------------------------------------------------
+
+# Playbooks: ignore all .yml except templates
+playbooks/*.yml
+!playbooks/*_template.yml
+
+# Roles: ignore all roles except role_template
+roles/*
+!roles/role_template
+!roles/role_template/**
+!roles/.gitkeep
+
+# Inventories: ignore all environments (prod, staging, etc.)
+inventories/*
+!inventories/example
+!inventories/example/**
+!inventories/.gitkeep
+
+# Scripts: uncomment the lines below if you want to hide scripts too
+# scripts/*
+# !scripts/.gitkeep

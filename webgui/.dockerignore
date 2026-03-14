@@ -1,0 +1,9 @@
+.git
+.env
+*.md
+docker-compose*.yml
+Caddyfile
+.env.example
+__pycache__
+*.pyc
+saml/settings.json

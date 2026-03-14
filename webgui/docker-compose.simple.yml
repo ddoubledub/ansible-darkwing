@@ -1,0 +1,25 @@
+# ─── Simple mode: no TLS, no SAML, just run it ──────────────
+# Usage:
+#   cd /path/to/ansible-darkwing/webgui
+#   docker compose -f docker-compose.simple.yml up -d --build
+# Then open http://localhost:8420
+
+services:
+  app:
+    build: .
+    container_name: ansible-gui
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ${ANSIBLE_REPO_PATH:?Set ANSIBLE_REPO_PATH in .env}:/repo
+      - ${SSH_KEY_PATH:-/home/ansible/.ssh}:/root/.ssh:ro
+      - ${GITCONFIG_PATH:-/home/ansible/.gitconfig}:/root/.gitconfig:ro
+    environment:
+      - ANSIBLE_REPO=/repo
+      - SAML_ENABLED=false
+      - BASIC_AUTH_ENABLED=${BASIC_AUTH_ENABLED:-true}
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER:-admin}
+      - BASIC_AUTH_PASS=${BASIC_AUTH_PASS:?Set BASIC_AUTH_PASS in .env}
+      - SESSION_SECRET=${SESSION_SECRET:?Set SESSION_SECRET in .env}
+      - SESSION_MAX_AGE=${SESSION_MAX_AGE:-28800}
+      - ANSIBLE_CONFIG=/repo/ansible.cfg

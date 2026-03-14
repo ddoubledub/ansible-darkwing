@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 400" width="500" height="400">
+  <defs>
+    <filter id="glow-sm" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-md" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-lg" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="bg" cx="40%" cy="50%" r="65%">
+      <stop offset="0%" stop-color="#180030"/>
+      <stop offset="100%" stop-color="#04000c"/>
+    </radialGradient>
+    <linearGradient id="hat-fill" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#160028"/>
+      <stop offset="100%" stop-color="#060012"/>
+    </linearGradient>
+    <linearGradient id="wing-fill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2a004e"/>
+      <stop offset="100%" stop-color="#0a0018"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="500" height="400" fill="url(#bg)"/>
+
+  <!-- Subtle scan lines -->
+  <g stroke="#6600aa" stroke-width="0.4" opacity="0.12">
+    <line x1="0" y1="60"  x2="500" y2="60"/>
+    <line x1="0" y1="120" x2="500" y2="120"/>
+    <line x1="0" y1="180" x2="500" y2="180"/>
+    <line x1="0" y1="240" x2="500" y2="240"/>
+    <line x1="0" y1="300" x2="500" y2="300"/>
+    <line x1="0" y1="360" x2="500" y2="360"/>
+  </g>
+
+  <!-- ══════════════════════════
+       WING  (behind hat)
+       ══════════════════════════ -->
+  <!-- Wing fill -->
+  <path d="M 318 228
+           L 368 168
+           L 348 196
+           L 408 138
+           L 390 170
+           L 445 148
+           L 424 184
+           L 372 224
+           Q 345 230 318 228 Z"
+        fill="url(#wing-fill)"/>
+
+  <!-- Wing membrane lines (feather/bat detail) -->
+  <g stroke="#9900dd" stroke-width="0.8" opacity="0.4">
+    <line x1="318" y1="228" x2="368" y2="168"/>
+    <line x1="318" y1="228" x2="408" y2="138"/>
+    <line x1="318" y1="228" x2="445" y2="148"/>
+  </g>
+
+  <!-- Wing neon outline -->
+  <path d="M 318 228
+           L 368 168
+           L 348 196
+           L 408 138
+           L 390 170
+           L 445 148
+           L 424 184
+           L 372 224"
+        fill="none" stroke="#bf00ff" stroke-width="2"
+        stroke-linejoin="round"
+        filter="url(#glow-md)" opacity="0.85"/>
+
+  <!-- Wing tip dots -->
+  <circle cx="368" cy="168" r="3" fill="#00e0ff" filter="url(#glow-sm)"/>
+  <circle cx="408" cy="138" r="3" fill="#00e0ff" filter="url(#glow-sm)"/>
+  <circle cx="445" cy="148" r="3" fill="#00e0ff" filter="url(#glow-sm)"/>
+
+  <!-- ══════════════════════════
+       HAT CROWN
+       ══════════════════════════ -->
+  <!-- Crown fill -->
+  <path d="M 148 228 L 154 128 Q 195 108 236 128 L 242 228 Z"
+        fill="url(#hat-fill)"/>
+
+  <!-- Crown neon outline -->
+  <path d="M 148 228 L 154 128 Q 195 108 236 128 L 242 228"
+        fill="none" stroke="#00e0ff" stroke-width="2.5"
+        stroke-linejoin="round" filter="url(#glow-md)"/>
+
+  <!-- ══════════════════════════
+       HAT BAND
+       ══════════════════════════ -->
+  <rect x="148" y="218" width="94" height="12" rx="2"
+        fill="#bf00ff" opacity="0.8" filter="url(#glow-sm)"/>
+
+  <!-- ══════════════════════════
+       HAT BRIM
+       ══════════════════════════ -->
+  <!-- Brim fill -->
+  <path d="M 52 234 Q 195 222 335 234 Q 195 252 52 244 Z"
+        fill="url(#hat-fill)"/>
+
+  <!-- Brim top edge neon -->
+  <path d="M 52 234 Q 195 222 335 234"
+        fill="none" stroke="#00e0ff" stroke-width="2.5"
+        filter="url(#glow-md)"/>
+
+  <!-- Brim bottom edge (dimmer) -->
+  <path d="M 52 244 Q 195 252 335 244"
+        fill="none" stroke="#6600aa" stroke-width="1.5" opacity="0.5"/>
+
+  <!-- ══════════════════════════
+       DW  (centered in crown)
+       ══════════════════════════ -->
+  <text x="195" y="193"
+        font-family="'Courier New', Courier, monospace"
+        font-size="58" font-weight="900"
+        fill="#00e0ff"
+        text-anchor="middle"
+        filter="url(#glow-lg)">DW</text>
+
+  <!-- ══════════════════════════
+       ANSIBLE  (top)
+       ══════════════════════════ -->
+  <text x="250" y="50"
+        font-family="'Courier New', Courier, monospace"
+        font-size="28" font-weight="bold"
+        fill="#bf00ff"
+        text-anchor="middle"
+        letter-spacing="10"
+        filter="url(#glow-md)">ANSIBLE</text>
+
+  <!-- ══════════════════════════
+       DARKWING  (bottom)
+       ══════════════════════════ -->
+  <text x="250" y="372"
+        font-family="'Courier New', Courier, monospace"
+        font-size="18" font-weight="bold"
+        fill="#00e0ff"
+        text-anchor="middle"
+        letter-spacing="10"
+        filter="url(#glow-sm)">DARKWING</text>
+
+  <!-- Thin rule lines flanking bottom text -->
+  <line x1="52" y1="356" x2="148" y2="356" stroke="#bf00ff" stroke-width="1" opacity="0.4"/>
+  <line x1="352" y1="356" x2="448" y2="356" stroke="#bf00ff" stroke-width="1" opacity="0.4"/>
+</svg>

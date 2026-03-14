@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ansible Playbook Builder</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0c0c14; color: #e0e0f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #10101a; }
+  ::-webkit-scrollbar-thumb { background: #2d2d42; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #00f0ff44; }
+  ::selection { background: #00f0ff33; }
+  input, select, textarea { outline: none; }
+  input:focus, select:focus, textarea:focus { border-color: #00f0ff !important; box-shadow: 0 0 8px #00f0ff22; }
+  @keyframes blink { 0%,50%{opacity:1}51%,100%{opacity:0} }
+  @keyframes glow { 0%{box-shadow:0 0 4px #00f0ff22}50%{box-shadow:0 0 12px #00f0ff44}100%{box-shadow:0 0 4px #00f0ff22} }
+  button:hover { filter: brightness(1.15); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+/* ─── API ───────────────────────────────────────────────── */
+const API = {
+  get: async (p) => { const r = await fetch(`/api${p}`); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
+  post: async (p, b) => { const r = await fetch(`/api${p}`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(b) }); return r.json(); },
+  put: async (p, b) => { const r = await fetch(`/api${p}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(b) }); return r.json(); },
+  del: async (p) => { const r = await fetch(`/api${p}`, { method:"DELETE" }); return r.json(); },
+};
+
+/* ─── Shared Styles ─────────────────────────────────────── */
+const S = {
+  input: { background:"#1c1c2e", color:"#e0e0f0", border:"1px solid #333", padding:"6px 10px", borderRadius:"4px", fontSize:"14px", fontFamily:"'JetBrains Mono',monospace", width:"100%", boxSizing:"border-box" },
+  label: { color:"#7878a0", fontSize:"12px", textTransform:"uppercase", letterSpacing:"1.5px", marginBottom:"10px", display:"block" },
+  btn: (a, c="#00f0ff") => ({ padding:"6px 14px", background:a?c:"transparent", border:`1px solid ${a?c:"#2d2d42"}`, color:a?"#0c0c14":"#7878a0", borderRadius:"4px", cursor:"pointer", fontSize:"13px", fontWeight:a?700:400, fontFamily:"'JetBrains Mono',monospace" }),
+  tag: (s, c="#00f0ff") => ({ padding:"7px 13px", background:s?`${c}18`:"#151522", border:`1px solid ${s?c:"#252538"}`, color:s?c:"#7878a0", borderRadius:"6px", cursor:"pointer", fontSize:"13px", fontFamily:"'JetBrains Mono',monospace" }),
+};
+const Toggle = ({value,onChange,label}) => (
+  <label style={{display:"flex",alignItems:"center",gap:"10px",cursor:"pointer",fontSize:"14px",color:"#c0c0d8"}}>
+    <div onClick={()=>onChange(!value)} style={{width:"38px",height:"22px",borderRadius:"11px",background:value?"#00f0ff":"#2d2d42",position:"relative",cursor:"pointer",boxShadow:value?"0 0 10px #00f0ff44":"none",transition:"all 0.2s"}}>
+      <div style={{width:"18px",height:"18px",borderRadius:"50%",background:value?"#0c0c14":"#5e5e85",position:"absolute",top:"2px",left:value?"18px":"2px",transition:"all 0.2s"}}/>
+    </div>
+    {label}
+  </label>
+);
+
+/* ─── Editable Var Table ────────────────────────────────── */
+const _isComplex = (v) => v !== null && typeof v === "object";
+const _formatVal = (v) => {
+  if (v === null || v === undefined) return "";
+  if (v === "<vault-encrypted>") return v;
+  if (_isComplex(v)) return JSON.stringify(v, null, 2);
+  return String(v);
+};
+const _parseVal = (s) => {
+  // Try to parse as JSON (for arrays/objects), fall back to string
+  const trimmed = s.trim();
+  if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+    try { return JSON.parse(trimmed); } catch {}
+  }
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed === "null") return null;
+  if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  return s;
+};
+const _displayVal = (v) => {
+  if (v === "<vault-encrypted>") return <span style={{color:"#ffb300",fontStyle:"italic"}}>vault-encrypted</span>;
+  if (v === null || v === undefined) return <span style={{color:"#50507a"}}>null</span>;
+  if (typeof v === "boolean") return <span style={{color:"#ff2d7f"}}>{String(v)}</span>;
+  if (Array.isArray(v)) return <span style={{color:"#a78bfa"}}>[{v.length} items]</span>;
+  if (typeof v === "object") return <span style={{color:"#a78bfa"}}>{"{" + Object.keys(v).length + " keys}"}</span>;
+  return String(v);
+};
+
+const EditableVarTable = ({title, vars, color, onSave, onVault}) => {
+  const [localVars, setLocalVars] = React.useState(vars);
+  const [editKey, setEditKey] = React.useState(null);
+  const [editVal, setEditVal] = React.useState("");
+  const [adding, setAdding] = React.useState(false);
+  const [newKey, setNewKey] = React.useState("");
+  const [newVal, setNewVal] = React.useState("");
+  const [dirty, setDirty] = React.useState(false);
+  const [expanded, setExpanded] = React.useState({});
+
+  React.useEffect(() => { setLocalVars(vars); setDirty(false); }, [vars]);
+
+  const startEdit = (k, v) => { setEditKey(k); setEditVal(_formatVal(v)); };
+  const saveEdit = () => {
+    if (editKey) {
+      const parsed = _parseVal(editVal);
+      const updated = { ...localVars, [editKey]: parsed };
+      setLocalVars(updated); setDirty(true); setEditKey(null);
+    }
+  };
+  const deleteVar = (k) => { const u={...localVars}; delete u[k]; setLocalVars(u); setDirty(true); };
+  const addVar = () => {
+    if (!newKey) return;
+    const updated = { ...localVars, [newKey]: _parseVal(newVal) };
+    setLocalVars(updated); setDirty(true); setNewKey(""); setNewVal(""); setAdding(false);
+  };
+  const saveAll = () => { onSave(localVars); setDirty(false); };
+  const revert = () => { setLocalVars(vars); setDirty(false); setEditKey(null); };
+  const toggleExpand = (k) => setExpanded(p => ({...p, [k]: !p[k]}));
+
+  const entries = Object.entries(localVars || {});
+
+  return (
+    <div style={{marginBottom:"16px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}>
+        <div style={{color,fontSize:"12px",fontWeight:500,display:"flex",alignItems:"center",gap:"8px"}}>
+          {title} <span style={{color:"#3e3e5c",fontSize:"10px",fontWeight:400}}>({entries.length})</span>
+          {dirty&&<span style={{color:"#ffb300",fontSize:"10px"}}>unsaved</span>}
+        </div>
+        <div style={{display:"flex",gap:"6px"}}>
+          {dirty&&<React.Fragment>
+            <button onClick={saveAll} style={{background:"#00f0ff",color:"#0c0c14",border:"none",padding:"2px 10px",borderRadius:"3px",cursor:"pointer",fontSize:"10px",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>Save</button>
+            <button onClick={revert} style={{background:"transparent",border:"1px solid #333",color:"#7878a0",padding:"2px 10px",borderRadius:"3px",cursor:"pointer",fontSize:"10px",fontFamily:"'JetBrains Mono',monospace"}}>Revert</button>
+          </React.Fragment>}
+          <button onClick={()=>setAdding(!adding)} style={{background:"transparent",border:"1px solid #333",color:"#7878a0",padding:"2px 8px",borderRadius:"3px",cursor:"pointer",fontSize:"10px",fontFamily:"'JetBrains Mono',monospace"}}>{adding?"Cancel":"+ var"}</button>
+        </div>
+      </div>
+      <div style={{background:"#121220",border:`1px solid ${dirty?"#ffb30044":"#1c1c2e"}`,borderRadius:"6px",overflow:"hidden"}}>
+        {entries.map(([k,v],i) => {
+          const complex = _isComplex(v);
+          const isExpanded = expanded[k];
+          return (
+            <div key={k} style={{borderBottom:i<entries.length-1?"1px solid #1a1a2c":"none"}}>
+              <div style={{display:"grid",gridTemplateColumns:"170px 1fr auto"}}>
+                <div style={{padding:"7px 12px",fontSize:"12px",color:"#7878a0",fontFamily:"'JetBrains Mono',monospace",borderRight:"1px solid #1c1c2e",background:"#0e0e18",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:"6px"}}>
+                  {complex&&<span onClick={()=>toggleExpand(k)} style={{cursor:"pointer",color:"#50507a",fontSize:"10px"}}>{isExpanded?"▼":"▶"}</span>}
+                  {k}
+                </div>
+                <div style={{padding:"4px 8px",fontSize:"12px",color,fontFamily:"'JetBrains Mono',monospace",display:"flex",alignItems:"center"}}>
+                  {editKey===k ? (
+                    <div style={{display:"flex",flexDirection:"column",gap:"4px",flex:1}}>
+                      {complex||editVal.includes("\n") ? (
+                        <textarea value={editVal} onChange={e=>setEditVal(e.target.value)} autoFocus rows={Math.min(editVal.split("\n").length+1,12)}
+                          onKeyDown={e=>{if(e.key==="Escape")setEditKey(null);if(e.key==="Enter"&&e.ctrlKey)saveEdit();}}
+                          style={{...S.input,fontSize:"11px",lineHeight:"1.4",resize:"vertical",minHeight:"60px"}}/>
+                      ) : (
+                        <input value={editVal} onChange={e=>setEditVal(e.target.value)} autoFocus
+                          onKeyDown={e=>{if(e.key==="Enter")saveEdit();if(e.key==="Escape")setEditKey(null);}}
+                          style={{...S.input,padding:"2px 6px",fontSize:"12px"}}/>
+                      )}
+                      <div style={{display:"flex",gap:"6px"}}>
+                        <button onClick={saveEdit} style={{background:color,color:"#0c0c14",border:"none",borderRadius:"3px",padding:"2px 8px",cursor:"pointer",fontSize:"10px",fontWeight:700}}>
+                          {complex?"Save (Ctrl+Enter)":"OK"}
+                        </button>
+                        <button onClick={()=>setEditKey(null)} style={{background:"transparent",border:"1px solid #333",color:"#7878a0",borderRadius:"3px",padding:"2px 8px",cursor:"pointer",fontSize:"10px"}}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <span onClick={()=>startEdit(k,v)} style={{cursor:"pointer",flex:1,padding:"3px 4px",borderRadius:"3px"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="#ffffff08"}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      {_displayVal(v)}
+                    </span>
+                  )}
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:"2px",padding:"0 4px"}}>
+                  {onVault&&!_isComplex(v)&&String(v)!=="<vault-encrypted>"&&(
+                    <button onClick={()=>onVault(k,v)} title={`Vault encrypt: ${k}`} style={{background:"transparent",border:"none",color:"#ffb30044",cursor:"pointer",fontSize:"11px",padding:"0 4px"}}
+                      onMouseEnter={e=>e.currentTarget.style.color="#ffb300"} onMouseLeave={e=>e.currentTarget.style.color="#ffb30044"}>🔒</button>
+                  )}
+                  <button onClick={()=>deleteVar(k)} style={{background:"transparent",border:"none",color:"#ff336644",cursor:"pointer",fontSize:"12px",padding:"0 4px"}}
+                    onMouseEnter={e=>e.currentTarget.style.color="#ff3366"} onMouseLeave={e=>e.currentTarget.style.color="#ff336644"}>×</button>
+                </div>
+              </div>
+              {/* Expanded view for complex values */}
+              {complex&&isExpanded&&editKey!==k&&(
+                <div style={{background:"#0c0c14",borderTop:"1px solid #1c1c2e",padding:"8px 12px 8px 182px"}}>
+                  <pre style={{margin:0,fontSize:"11px",lineHeight:"1.5",color:"#a78bfa",whiteSpace:"pre-wrap"}}>{JSON.stringify(v,null,2)}</pre>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {entries.length===0&&<div style={{padding:"12px",color:"#3e3e5c",fontSize:"12px",textAlign:"center"}}>No variables defined</div>}
+        {adding&&(
+          <div style={{display:"grid",gridTemplateColumns:"170px 1fr auto",borderTop:"1px solid #333"}}>
+            <input placeholder="key" value={newKey} onChange={e=>setNewKey(e.target.value)} autoFocus
+              style={{...S.input,borderRadius:0,border:"none",padding:"7px 12px",fontSize:"12px"}}/>
+            <input placeholder="value (or JSON for complex)" value={newVal} onChange={e=>setNewVal(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&newKey)addVar();if(e.key==="Escape")setAdding(false);}}
+              style={{...S.input,borderRadius:0,border:"none",borderLeft:"1px solid #1c1c2e",padding:"7px 12px",fontSize:"12px"}}/>
+            <button onClick={addVar} disabled={!newKey}
+              style={{background:newKey?color:"#2d2d42",color:newKey?"#0c0c14":"#5e5e85",border:"none",padding:"0 10px",cursor:newKey?"pointer":"default",fontSize:"11px",fontWeight:700}}>+</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ─── YAML Generator ────────────────────────────────────── */
+const buildYAML = (play) => {
+  if (!play.targets.length && !play.roles.length) return "# Select targets and roles to build a playbook";
+  const L = ["---"];
+  L.push(`- name: ${play.name||"Untitled Play"}`);
+  // On-demand: hosts: "{{ host }}" — targets passed via -e host= at runtime
+  // Scheduled: hardcoded hosts list
+  if (play.mode === "scheduled") {
+    L.push(`  hosts: ${play.targets.join(",")||"all"}`);
+  } else {
+    L.push(`  hosts: "{{ host }}"`);
+  }
+  L.push(`  become: ${play.become?"yes":"no"}`);
+  if (play.serial) L.push(`  serial: ${play.serial}`);
+  L.push(`  gather_facts: ${play.gatherFacts?"yes":"no"}`);
+  if (play.roles.length) {
+    L.push("  roles:");
+    play.roles.forEach(r => {
+      const hv = r.overrides && Object.keys(r.overrides).some(k=>r.overrides[k]!=="");
+      if (!hv) L.push(`    - ${r.name}`);
+      else { L.push(`    - role: ${r.name}`); Object.entries(r.overrides).forEach(([k,v])=>{ if(v!=="") L.push(`      ${k}: ${v}`); }); }
+    });
+  }
+  return L.join("\n");
+};
+
+/* ─── Sidebar Nav Item ──────────────────────────────────── */
+const NavItem = ({icon, label, active, onClick, count, color="#00f0ff"}) => (
+  <button onClick={onClick} style={{
+    display:"flex", alignItems:"center", gap:"10px", width:"100%",
+    padding:"10px 16px", background:active?`${color}12`:"transparent",
+    borderTop:"none", borderRight:"none", borderBottom:"none",
+    borderLeft:active?`3px solid ${color}`:"3px solid transparent",
+    color:active?color:"#5e5e85",
+    cursor:"pointer", fontSize:"13px", fontFamily:"'JetBrains Mono',monospace",
+    fontWeight:active?600:400, textAlign:"left", transition:"all 0.15s",
+    boxShadow:active?`inset 0 0 20px ${color}08`:"none",
+  }}>
+    <span style={{width:"18px",textAlign:"center",fontSize:"14px",filter:active?`drop-shadow(0 0 4px ${color}66)`:"none"}}>{icon}</span>
+    <span style={{flex:1}}>{label}</span>
+    {count>0 && <span style={{background:color+"25",color,borderRadius:"8px",padding:"2px 7px",fontSize:"11px",fontWeight:700,boxShadow:`0 0 6px ${color}22`}}>{count}</span>}
+  </button>
+);
+
+/* ════════════════════════════════════════════════════════════
+   MAIN APP
+   ════════════════════════════════════════════════════════════ */
+function App() {
+  const [tab, setTab] = useState("targets");
+  const [previewTab, setPreviewTab] = useState("playbook");
+  const [env, setEnv] = useState("");
+  const [envs, setEnvs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Data
+  const [inventory, setInventory] = useState(null);
+  const [allRoles, setAllRoles] = useState([]);
+  const [playbooks, setPlaybooks] = useState([]);
+  const [ansibleCfg, setAnsibleCfg] = useState("");
+  const [gitStatus, setGitStatus] = useState(null);
+  const [gitLog, setGitLog] = useState([]);
+  const [branches, setBranches] = useState([]);
+  const [schedules, setSchedules] = useState([]);
+
+  const [play, setPlay] = useState({ name:"New Play", targets:[], roles:[], become:true, gatherFacts:true, serial:"", mode:"ondemand" });
+
+  // UI state
+  const [searchFilter, setSearchFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState([]);
+  const [groupFilter, setGroupFilter] = useState([]);
+  const [editingHostTags, setEditingHostTags] = useState(null); // hostname being edited
+  const [editTagInput, setEditTagInput] = useState("");
+  const [copiedTarget, setCopiedTarget] = useState("");
+  const [commitMsg, setCommitMsg] = useState("");
+  const [syncing, setSyncing] = useState(null);
+  const [syncLog, setSyncLog] = useState([]);
+  const [cfgEdit, setCfgEdit] = useState(false);
+  const [cfgTemp, setCfgTemp] = useState("");
+  const [runResult, setRunResult] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [runLines, setRunLines] = useState([]);
+  const [runId, setRunId] = useState(null);
+  const runWsRef = useRef(null);
+  const runLogRef = useRef(null);
+
+  // Helper: expand targets to include both hosts and groups
+  const buildLimit = (targets) => targets.join(",");
+
+  // Helper: expand groups to show affected hosts for confirmation
+  const expandTargets = (targets) => {
+    const expanded = new Set();
+    const groupNames = [];
+    targets.forEach(t => {
+      const g = groups.find(gg => gg.name === t);
+      if (g) { groupNames.push(`${t} (${g.hosts.length} hosts)`); g.hosts.forEach(h => expanded.add(h)); }
+      else { expanded.add(t); }
+    });
+    return { hosts: [...expanded].sort(), groupSummary: groupNames };
+  };
+
+  // Confirmation dialog
+  const confirmRun = (targets, cmdPreview, onConfirm) => {
+    const { hosts, groupSummary } = expandTargets(targets);
+    const msg = [
+      "⚠ About to execute:",
+      `  ${cmdPreview}`,
+      "",
+      `Targets (${hosts.length} hosts):`,
+      ...groupSummary.map(g => `  Group: ${g}`),
+      ...(hosts.length <= 20 ? hosts.map(h => `  • ${h}`) : [`  • ${hosts.slice(0,15).join("\n  • ")}`, `  ... and ${hosts.length-15} more`]),
+      "",
+      "Proceed?"
+    ].join("\n");
+    if (confirm(msg)) onConfirm();
+  };
+
+  // WebSocket run with streaming
+  const startStreamingRun = useCallback((params) => {
+    setRunLines([]); setRunResult(null); setRunning(true); setRunId(null);
+
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${location.host}/api/ws/run`);
+    runWsRef.current = ws;
+
+    ws.onopen = () => { ws.send(JSON.stringify({ action: "run", ...params })); };
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.run_id) setRunId(msg.run_id);
+        setRunLines(prev => [...prev, msg].slice(-2000));
+        setTimeout(() => { if (runLogRef.current) runLogRef.current.scrollTop = runLogRef.current.scrollHeight; }, 10);
+        if (msg.type === "exit") { setRunning(false); setRunResult({ success: msg.code === 0, returncode: msg.code, killed: msg.killed }); }
+      } catch {}
+    };
+    ws.onclose = () => { setRunning(false); };
+    ws.onerror = () => { setRunning(false); };
+  }, []);
+
+  const killRun = useCallback(() => {
+    if (runWsRef.current && runWsRef.current.readyState === 1) {
+      runWsRef.current.send(JSON.stringify({ action: "kill" }));
+    }
+  }, []);
+  const [showRoleCreator, setShowRoleCreator] = useState(false);
+  const [newRole, setNewRole] = useState({name:"",description:"",defaults:{}});
+  const [newRoleVars, setNewRoleVars] = useState([]);
+  const [selectedPlaybook, setSelectedPlaybook] = useState(null);
+  const [roleDetail, setRoleDetail] = useState(null);
+  const [roleDetailTab, setRoleDetailTab] = useState("tasks");
+  const [roleEditing, setRoleEditing] = useState(false);
+  const [roleEditContent, setRoleEditContent] = useState("");
+  const [invEditMode, setInvEditMode] = useState(false); // false=form, true=raw
+  const [invRaw, setInvRaw] = useState("");
+  const [newHost, setNewHost] = useState({hostname:"",ansible_host:"",host_tags:""});
+  const [newGroup, setNewGroup] = useState({name:"",hosts:""});
+  const [schedLogs, setSchedLogs] = useState([]);
+  const [selectedSched, setSelectedSched] = useState(null);
+  const [newSched, setNewSched] = useState({name:"",playbook:"",cron_expr:"",targets:"",inventory:"prod",enabled:true});
+  const [showNewSched, setShowNewSched] = useState(false);
+
+  // Vault tool
+  const [vaultInput, setVaultInput] = useState({name:"",value:""});
+  const [vaultResult, setVaultResult] = useState(null);
+  const [vaultLoading, setVaultLoading] = useState(false);
+  const encryptString = async(name,value)=>{
+    setVaultLoading(true);setVaultResult(null);
+    try{const r=await API.post("/vault/encrypt_string",{name,value});setVaultResult(r);}
+    catch(e){setVaultResult({success:false,error:String(e)});}
+    setVaultLoading(false);
+  };
+
+  // Resizable sidebar
+  const [sidebarWidth, setSidebarWidth] = useState(450);
+  const [dragging, setDragging] = useState(false);
+  const handleMouseDown = useCallback((e) => {
+    e.preventDefault(); setDragging(true);
+    const startX=e.clientX, startW=sidebarWidth;
+    const onMove=(e)=>setSidebarWidth(Math.min(Math.max(startW+(startX-e.clientX),250),window.innerWidth*0.7));
+    const onUp=()=>{setDragging(false);document.removeEventListener("mousemove",onMove);document.removeEventListener("mouseup",onUp);document.body.style.cursor="";document.body.style.userSelect="";};
+    document.body.style.cursor="col-resize";document.body.style.userSelect="none";
+    document.addEventListener("mousemove",onMove);document.addEventListener("mouseup",onUp);
+  },[sidebarWidth]);
+
+  // Terminal
+  const [termLines, setTermLines] = useState([{type:"info",data:"Terminal ready."}]);
+  const [termCmd, setTermCmd] = useState("");
+  const [termRunning, setTermRunning] = useState(false);
+  const [termHistory, setTermHistory] = useState([]);
+  const [historyIdx, setHistoryIdx] = useState(-1);
+  const termRef = useRef(null);
+  const wsRef = useRef(null);
+  const connectTerminal = useCallback(()=>{
+    if(wsRef.current&&wsRef.current.readyState<=1)return;
+    const ws=new WebSocket(`${location.protocol==="https:"?"wss:":"ws:"}//${location.host}/api/ws/terminal`);
+    ws.onmessage=(e)=>{try{const m=JSON.parse(e.data);setTermLines(p=>[...p,m].slice(-500));setTimeout(()=>{if(termRef.current)termRef.current.scrollTop=termRef.current.scrollHeight;},10);if(m.type==="exit")setTermRunning(false);}catch{}};
+    ws.onclose=()=>setTermRunning(false);wsRef.current=ws;
+  },[]);
+  const sendTermCmd=useCallback(()=>{
+    if(!termCmd.trim())return;
+    if(!wsRef.current||wsRef.current.readyState!==1){connectTerminal();setTimeout(()=>{if(wsRef.current?.readyState===1){wsRef.current.send(JSON.stringify({cmd:termCmd}));setTermHistory(p=>[termCmd,...p].slice(0,50));setHistoryIdx(-1);setTermRunning(true);setTermCmd("");}},500);return;}
+    wsRef.current.send(JSON.stringify({cmd:termCmd}));setTermHistory(p=>[termCmd,...p].slice(0,50));setHistoryIdx(-1);setTermRunning(true);setTermCmd("");
+  },[termCmd,connectTerminal]);
+
+  /* ─── Loaders ─────────────────────────────────────────── */
+  const loadAll = useCallback(async()=>{
+    setLoading(true);
+    try{
+      const [ed,rd,pd,cd]=await Promise.all([API.get("/environments"),API.get("/roles"),API.get("/playbooks"),API.get("/cfg")]);
+      setEnvs(ed.environments||[]);setAllRoles(rd.roles||[]);setPlaybooks(pd.playbooks||[]);setAnsibleCfg(cd.content||"");
+      if(ed.environments?.length&&!env)setEnv(ed.environments.includes("prod")?"prod":ed.environments[0]);
+    }catch(e){console.error(e);}
+    setLoading(false);
+  },[]);
+  const loadInventory = useCallback(async()=>{if(!env)return;try{const d=await API.get(`/inventory/${env}`);setInventory(d);setInvRaw(d.hosts_raw||"");}catch(e){console.error(e);}},[env]);
+  const loadGit = useCallback(async()=>{try{const[s,l,b]=await Promise.all([API.get("/git/status"),API.get("/git/log?count=15"),API.get("/git/branches")]);setGitStatus(s);setGitLog(l.commits||[]);setBranches(b.branches||[]);}catch(e){console.error(e);}},[]);
+  const loadSchedules = useCallback(async()=>{try{const d=await API.get("/schedules");setSchedules(d.schedules||[]);}catch(e){console.error(e);}},[]);
+
+  useEffect(()=>{loadAll();loadGit();loadSchedules();},[]);
+  useEffect(()=>{loadInventory();},[env]);
+
+  /* ─── Parse inventory ─────────────────────────────────── */
+  const groups = useMemo(()=>{
+    if(!inventory?.hosts_parsed)return[];
+    const parsed=inventory.hosts_parsed,result=[];
+    const walk=(obj)=>{if(!obj||typeof obj!=="object")return;Object.entries(obj).forEach(([key,val])=>{if(key==="all"){walk(val?.children||val);return;}if(key==="hosts"||key==="vars")return;const hosts=[];if(val?.hosts)Object.keys(val.hosts).forEach(h=>hosts.push(h));if(hosts.length||val?.children)result.push({name:key,hosts});if(val?.children)walk(val.children);});};
+    walk(parsed);return result;
+  },[inventory]);
+  const allHosts = useMemo(()=>{
+    const s=new Set();groups.forEach(g=>g.hosts.forEach(h=>s.add(h)));
+    if(inventory?.host_vars)Object.keys(inventory.host_vars).forEach(h=>s.add(h));
+    if(inventory?.hosts_parsed?.all?.hosts)Object.keys(inventory.hosts_parsed.all.hosts).forEach(h=>s.add(h));
+    return[...s].sort();
+  },[groups,inventory]);
+
+  // Extract all unique host_tags from inventory
+  const allTags = useMemo(()=>{
+    const tagSet=new Set();
+    if(inventory?.hosts_parsed?.all?.hosts){
+      Object.values(inventory.hosts_parsed.all.hosts).forEach(hv=>{
+        (hv?.host_tags||hv?.tags||[]).forEach(t=>tagSet.add(t));
+      });
+    }
+    return[...tagSet].sort();
+  },[inventory]);
+
+  // Hosts filtered by selected tags (AND logic — must match ALL selected tags)
+  const filteredHosts = useMemo(()=>{
+    let hosts = allHosts;
+    // Filter by group membership (OR — host must be in ANY selected group)
+    if(groupFilter.length>0){
+      const groupHosts=new Set();
+      groupFilter.forEach(gn=>{const g=groups.find(gg=>gg.name===gn);if(g)g.hosts.forEach(h=>groupHosts.add(h));});
+      hosts=hosts.filter(h=>groupHosts.has(h));
+    }
+    // Filter by tags (AND — host must have ALL selected tags)
+    if(tagFilter.length>0){
+      hosts=hosts.filter(h=>{
+        const hv=inventory?.hosts_parsed?.all?.hosts?.[h];
+        const htags=hv?.host_tags||hv?.tags||[];
+        return tagFilter.every(t=>htags.includes(t));
+      });
+    }
+    return hosts;
+  },[allHosts,tagFilter,groupFilter,inventory,groups]);
+
+  const toggleTagFilter=(tag)=>setTagFilter(prev=>prev.includes(tag)?prev.filter(t=>t!==tag):[...prev,tag]);
+  const toggleGroupFilter=(gn)=>setGroupFilter(prev=>prev.includes(gn)?prev.filter(g=>g!==gn):[...prev,gn]);
+  const hasActiveFilters=tagFilter.length>0||groupFilter.length>0;
+  const clearAllFilters=()=>{setTagFilter([]);setGroupFilter([]);};
+
+  // Tag management
+  const saveHostTags=async(hostname,tags)=>{
+    try{await API.put(`/inventory/${env}/host/${hostname}/tags`,{host_tags:tags});loadInventory();}catch(e){alert(e);}
+    setEditingHostTags(null);
+  };
+  const addTagToHost=(hostname,tag)=>{
+    const hv=inventory?.hosts_parsed?.all?.hosts?.[hostname];
+    const current=hv?.host_tags||hv?.tags||[];
+    if(!current.includes(tag))saveHostTags(hostname,[...current,tag]);
+  };
+  const removeTagFromHost=(hostname,tag)=>{
+    const hv=inventory?.hosts_parsed?.all?.hosts?.[hostname];
+    const current=hv?.host_tags||hv?.tags||[];
+    saveHostTags(hostname,current.filter(t=>t!==tag));
+  };
+
+  /* ─── Helpers ─────────────────────────────────────────── */
+  const toggleTarget=(t)=>setPlay(p=>({...p,targets:p.targets.includes(t)?p.targets.filter(x=>x!==t):[...p.targets,t]}));
+  const addRole=(role)=>setPlay(p=>{if(p.roles.find(r=>r.name===role.name))return p;return{...p,roles:[...p.roles,{name:role.name,overrides:{}}]};});
+  const removeRole=(name)=>setPlay(p=>({...p,roles:p.roles.filter(r=>r.name!==name)}));
+  const moveRole=(idx,dir)=>setPlay(p=>{const nr=[...p.roles],ni=idx+dir;if(ni<0||ni>=nr.length)return p;[nr[idx],nr[ni]]=[nr[ni],nr[idx]];return{...p,roles:nr};});
+  const updateOverride=(rn,k,v)=>setPlay(p=>({...p,roles:p.roles.map(r=>r.name===rn?{...r,overrides:{...r.overrides,[k]:v}}:r)}));
+  const loadRoleDetail=async(name)=>{try{const d=await API.get(`/role/${name}`);setRoleDetail(d);setRoleDetailTab("tasks");setPreviewTab("role");}catch(e){console.error(e);}};
+
+  const resolvedGroupVars=useMemo(()=>{
+    if(!inventory?.group_vars)return{};
+    const r={};
+    // Directly selected groups
+    play.targets.forEach(t=>{if(inventory.group_vars[t])r[t]=inventory.group_vars[t];});
+    // Groups that contain selected hosts
+    const selectedHosts=new Set(play.targets.filter(t=>allHosts.includes(t)));
+    // Also expand selected groups to their hosts
+    play.targets.forEach(t=>{const g=groups.find(gg=>gg.name===t);if(g)g.hosts.forEach(h=>selectedHosts.add(h));});
+    // Find all groups each selected host belongs to
+    if(selectedHosts.size>0){
+      groups.forEach(g=>{
+        if(r[g.name])return; // already included
+        if(g.hosts.some(h=>selectedHosts.has(h))){
+          if(inventory.group_vars[g.name])r[g.name]=inventory.group_vars[g.name];
+        }
+      });
+      // Always include 'all' group_vars if they exist
+      if(inventory.group_vars["all"]&&!r["all"])r["all"]=inventory.group_vars["all"];
+    }
+    return r;
+  },[play.targets,inventory,groups,allHosts]);
+  const resolvedHostVars=useMemo(()=>{if(!inventory?.host_vars)return{};const hosts=new Set(play.targets.filter(t=>allHosts.includes(t)));play.targets.forEach(t=>{const g=groups.find(gg=>gg.name===t);if(g)g.hosts.forEach(h=>hosts.add(h));});const r={};hosts.forEach(h=>{if(inventory.host_vars[h])r[h]=inventory.host_vars[h];});return r;},[play.targets,inventory,groups,allHosts]);
+
+  const yaml = useMemo(()=>buildYAML(play),[play]);
+  const copyText=(t,id)=>{navigator.clipboard.writeText(t).then(()=>{setCopiedTarget(id);setTimeout(()=>setCopiedTarget(""),2000);});};
+  const savePlaybook=async()=>{const fn=play.name.toLowerCase().replace(/[^a-z0-9]+/g,"_")+".yml";try{await API.post("/playbooks",{path:fn,content:yaml});loadAll();}catch(e){alert(e);}};
+  const handleRun=async(saveFirst=false,check=false)=>{
+    const limit=buildLimit(play.targets);
+    const targetMethod=play.mode==="ondemand"?`-e host=${limit}`:`--limit ${limit}`;
+    const cmdPreview=`ansible-playbook [${saveFirst?"saved":"temp"}] -i inventories/${env}${limit?" "+targetMethod:""}${check?" --check":""}`;
+    confirmRun(play.targets, cmdPreview, async()=>{
+      if(saveFirst){const fn=play.name.toLowerCase().replace(/[^a-z0-9]+/g,"_")+".yml";await API.post("/playbooks",{path:fn,content:yaml});}
+      startStreamingRun({yaml_content:yaml,inventory:env,limit,check});
+      setTab("run");
+    });
+  };
+  const runExistingPlaybook=async(pb,targets,check=false)=>{
+    const targetList=targets?targets.split(",").map(t=>t.trim()):[];
+    const cmdPreview=`ansible-playbook playbooks/${pb.path} -i inventories/${env}${targets?" --limit "+targets:""}${check?" --check":""}`;
+    confirmRun(targetList.length?targetList:["all"], cmdPreview, ()=>{
+      startStreamingRun({playbook:pb.path,inventory:env,limit:targets,check});
+      setTab("run");
+    });
+  };
+  const handlePush=async()=>{if(!commitMsg.trim())return;setSyncing("push");setSyncLog(p=>[...p,{msg:`$ git add -A && git commit -m "${commitMsg}"`,type:"cmd",time:new Date().toLocaleTimeString()}]);try{const cr=await API.post("/git/commit",{message:commitMsg});setSyncLog(p=>[...p,{msg:cr.stdout||cr.stderr||"committed",type:cr.success?"success":"error",time:new Date().toLocaleTimeString()}]);if(cr.success){setSyncLog(p=>[...p,{msg:"$ git push",type:"cmd",time:new Date().toLocaleTimeString()}]);const pr=await API.post("/git/push");setSyncLog(p=>[...p,{msg:pr.stdout||pr.stderr||"pushed",type:pr.success?"success":"error",time:new Date().toLocaleTimeString()}]);}setCommitMsg("");loadGit();}catch(e){setSyncLog(p=>[...p,{msg:`Error: ${e}`,type:"error",time:new Date().toLocaleTimeString()}]);}setSyncing(null);};
+  const handlePull=async()=>{setSyncing("pull");try{const r=await API.post("/git/pull");setSyncLog(p=>[...p,{msg:r.stdout||r.stderr||"done",type:r.success?"success":"error",time:new Date().toLocaleTimeString()}]);loadAll();loadGit();loadInventory();}catch(e){setSyncLog(p=>[...p,{msg:`Error:${e}`,type:"error",time:new Date().toLocaleTimeString()}]);}setSyncing(null);};
+  const createNewRole=async()=>{if(!newRole.name)return;const defs={};newRoleVars.forEach(v=>{if(v.key)defs[v.key]=v.default||"";});try{await API.post("/roles",{name:newRole.name,description:newRole.description,defaults:defs});setShowRoleCreator(false);setNewRole({name:"",description:"",defaults:{}});setNewRoleVars([]);loadAll();}catch(e){alert(e);}};
+  const saveCfg=async()=>{await API.put("/cfg",{content:cfgTemp});setAnsibleCfg(cfgTemp);setCfgEdit(false);};
+  const saveInvRaw=async()=>{try{await API.put(`/inventory/${env}/hosts_raw`,{content:invRaw});loadInventory();}catch(e){alert(e);}};
+  const addHostToInv=async()=>{if(!newHost.hostname)return;try{await API.post(`/inventory/${env}/host`,{hostname:newHost.hostname,ansible_host:newHost.ansible_host,host_tags:newHost.host_tags?newHost.host_tags.split(",").map(t=>t.trim()):[]});setNewHost({hostname:"",ansible_host:"",host_tags:""});loadInventory();}catch(e){alert(e);}};
+  const removeHostFromInv=async(hostname)=>{if(!confirm(`Remove ${hostname} from inventory?`))return;try{await API.del(`/inventory/${env}/host/${hostname}`);loadInventory();}catch(e){alert(e);}};
+  const addGroupToInv=async()=>{if(!newGroup.name)return;try{await API.post(`/inventory/${env}/group`,{group_name:newGroup.name,hosts:newGroup.hosts?newGroup.hosts.split(",").map(t=>t.trim()):[]});setNewGroup({name:"",hosts:""});loadInventory();}catch(e){alert(e);}};
+  const createSchedule=async()=>{if(!newSched.name||!newSched.cron_expr)return;try{await API.post("/schedules",{...newSched,inventory:env});setShowNewSched(false);setNewSched({name:"",playbook:"",cron_expr:"",targets:"",inventory:env,enabled:true});loadSchedules();}catch(e){alert(e);}};
+  const loadSchedLogs=async(id)=>{try{const d=await API.get(`/schedules/${id}/logs`);setSchedLogs(d.logs||[]);}catch(e){console.error(e);}};
+
+  const filteredRoles=allRoles.filter(r=>r.name.includes(searchFilter.toLowerCase())||(r.meta?.galaxy_info?.description||"").toLowerCase().includes(searchFilter.toLowerCase()));
+  const dirtyCount=gitStatus?.dirty_files?.length||0;
+
+  // Playbook run target state (for running existing playbooks)
+  const [pbRunTargets, setPbRunTargets] = useState("");
+
+  if(loading)return <div style={{textAlign:"center",padding:"60px",color:"#3e3e5c"}}>Loading...</div>;
+
+  /* ════════════ RENDER ════════════ */
+  return (
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+      {/* ═══ HEADER ═══ */}
+      <div style={{borderBottom:"1px solid #00f0ff15",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,background:"#0c0c14",boxShadow:"0 1px 12px #00f0ff08"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+          <div style={{width:"10px",height:"10px",borderRadius:"50%",background:dirtyCount>0?"#ffb300":"#00f0ff",boxShadow:`0 0 12px ${dirtyCount>0?"#ffb30088":"#00f0ff88"}, 0 0 24px ${dirtyCount>0?"#ffb30044":"#00f0ff44"}`}}/>
+          <span style={{fontSize:"17px",fontWeight:700,color:"#00f0ff",textShadow:"0 0 10px #00f0ff44, 0 0 20px #00f0ff22"}}>ANSIBLE BUILDER</span>
+          <span style={{color:"#3e3e5c",fontSize:"11px"}}>v4</span>
+          {dirtyCount>0&&<span style={{color:"#ffb300",fontSize:"11px"}}>{dirtyCount} changed</span>}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+          <label style={{color:"#50507a",fontSize:"11px"}}>ENV:</label>
+          <select value={env} onChange={e=>setEnv(e.target.value)} style={{...S.input,width:"auto",padding:"4px 8px",fontSize:"12px"}}>
+            {envs.map(e=><option key={e} value={e}>{e}</option>)}
+          </select>
+          <input value={play.name} onChange={e=>setPlay({...play,name:e.target.value})} style={{...S.input,width:"220px",textAlign:"right"}}/>
+        </div>
+      </div>
+
+      <div style={{display:"flex",flex:1,minHeight:0}}>
+        {/* ═══ LEFT SIDEBAR NAV ═══ */}
+        <div style={{width:"180px",flexShrink:0,borderRight:"1px solid #1c1c2e",background:"#10101a",display:"flex",flexDirection:"column",overflowY:"auto"}}>
+          <div style={{padding:"12px 16px 6px",color:"#00f0ff88",fontSize:"10px",textTransform:"uppercase",letterSpacing:"3px",fontWeight:600}}>Build</div>
+          <NavItem icon="◎" label="Targets" active={tab==="targets"} onClick={()=>setTab("targets")} count={play.targets.length}/>
+          <NavItem icon="◈" label="Roles" active={tab==="roles"} onClick={()=>setTab("roles")} count={play.roles.length}/>
+          <NavItem icon="≡" label="Role Vars" active={tab==="vars"} onClick={()=>setTab("vars")}/>
+          <NavItem icon="⊞" label="Host/Grp Vars" active={tab==="hostvars"} onClick={()=>setTab("hostvars")} count={Object.keys(resolvedGroupVars).length+Object.keys(resolvedHostVars).length}/>
+          <NavItem icon="▶" label="Run" active={tab==="run"} onClick={()=>setTab("run")} color="#00ff88"/>
+
+          <div style={{padding:"16px 16px 6px",color:"#ff2d7f88",fontSize:"10px",textTransform:"uppercase",letterSpacing:"3px",fontWeight:600,borderTop:"1px solid #1c1c2e",marginTop:"8px"}}>Manage</div>
+          <NavItem icon="📋" label="Playbooks" active={tab==="playbooks"} onClick={()=>setTab("playbooks")} count={playbooks.length} color="#ff2d7f"/>
+          <NavItem icon="🖥" label="Inventory" active={tab==="inventory"} onClick={()=>setTab("inventory")} color="#ffb300"/>
+          <NavItem icon="🔒" label="Vault" active={tab==="vault"} onClick={()=>setTab("vault")} color="#ffb300"/>
+          <NavItem icon="⏱" label="Schedules" active={tab==="cron"} onClick={()=>{setTab("cron");loadSchedules();}} count={schedules.filter(s=>s.enabled).length} color="#ff2d7f"/>
+          <NavItem icon="⚙" label="Config" active={tab==="cfg"} onClick={()=>setTab("cfg")} color="#a78bfa"/>
+          <NavItem icon="⑂" label="Git" active={tab==="git"} onClick={()=>{setTab("git");loadGit();}} color="#ff2d7f" count={dirtyCount>0?dirtyCount:0}/>
+          <NavItem icon="▸" label="Terminal" active={tab==="term"} onClick={()=>{setTab("term");connectTerminal();}} color="#e0e0f0"/>
+        </div>
+
+        {/* ═══ MAIN CONTENT ═══ */}
+        <div style={{flex:1,display:"flex",minWidth:0}}>
+          {/* ── Content Panel ── */}
+          <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0}}>
+            <div style={{padding:"20px",flex:1,overflowY:"auto"}}>
+
+              {/* ── TARGETS ── */}
+              {tab==="targets"&&(<div>
+                {/* Filter section */}
+                <div style={{marginBottom:"16px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+                    <div style={S.label}>Filters {hasActiveFilters&&<span style={{color:"#00f0ff"}}>({filteredHosts.length} of {allHosts.length} hosts)</span>}</div>
+                    {hasActiveFilters&&<button onClick={clearAllFilters} style={{...S.btn(false),padding:"3px 10px",fontSize:"11px"}}>Clear All</button>}
+                  </div>
+                  {/* Groups */}
+                  {groups.length>0&&(<div style={{marginBottom:"12px"}}>
+                    <div style={{color:"#50507a",fontSize:"11px",marginBottom:"6px"}}>GROUPS</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:"6px"}}>
+                      {groups.map(g=>{const active=groupFilter.includes(g.name);return(
+                        <button key={g.name} onClick={()=>toggleGroupFilter(g.name)} style={{
+                          padding:"5px 12px",background:active?"#a78bfa18":"#151522",
+                          border:active?"1px solid #a78bfa":"1px solid #252538",
+                          color:active?"#a78bfa":"#50507a",borderRadius:"4px",cursor:"pointer",
+                          fontSize:"12px",fontFamily:"'JetBrains Mono',monospace",
+                          boxShadow:active?"0 0 8px #a78bfa15":"none",
+                        }}>{g.name}<span style={{color:active?"#a78bfa88":"#3e3e5c",marginLeft:"6px",fontSize:"10px"}}>({g.hosts.length})</span></button>
+                      );})}
+                    </div>
+                  </div>)}
+                  {/* Tags */}
+                  {allTags.length>0&&(<div>
+                    <div style={{color:"#50507a",fontSize:"11px",marginBottom:"6px"}}>TAGS</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:"6px"}}>
+                      {allTags.map(t=><button key={t} onClick={()=>toggleTagFilter(t)} style={{
+                        padding:"4px 10px",background:tagFilter.includes(t)?"#ffb30018":"#151522",
+                        border:tagFilter.includes(t)?"1px solid #ffb300":"1px solid #252538",
+                        color:tagFilter.includes(t)?"#ffb300":"#50507a",borderRadius:"4px",cursor:"pointer",
+                        fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",
+                        boxShadow:tagFilter.includes(t)?"0 0 8px #ffb30015":"none",
+                      }}>{t}</button>)}
+                    </div>
+                  </div>)}
+                </div>
+                {/* Bulk actions */}
+                {hasActiveFilters&&filteredHosts.length>0&&(<div style={{marginBottom:"12px",display:"flex",gap:"8px"}}>
+                  <button onClick={()=>{setPlay(p=>({...p,targets:[...new Set([...p.targets,...filteredHosts])]}));}} style={{...S.btn(false,"#00f0ff"),padding:"5px 14px",fontSize:"12px"}}>Select All Filtered ({filteredHosts.length})</button>
+                  <button onClick={()=>{setPlay(p=>({...p,targets:p.targets.filter(t=>!filteredHosts.includes(t))}));}} style={{...S.btn(false,"#ff3366"),padding:"5px 14px",fontSize:"12px"}}>Deselect Filtered</button>
+                </div>)}
+                {/* Host list */}
+                {filteredHosts.length>0&&(<div>
+                  <div style={S.label}>Hosts ({filteredHosts.length}{hasActiveFilters?` of ${allHosts.length}`:""})</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:"2px"}}>
+                    {filteredHosts.map(h=>{const sel=play.targets.includes(h),hv=inventory?.hosts_parsed?.all?.hosts?.[h];const htags=hv?.host_tags||hv?.tags||[];const isEditing=editingHostTags===h;
+                    return(<div key={h}>
+                      <div style={{display:"flex",alignItems:"center",gap:"6px",padding:"7px 12px",background:sel?"#00f0ff08":"transparent",border:sel?"1px solid #00f0ff22":"1px solid transparent",borderRadius:isEditing?"4px 4px 0 0":"4px",cursor:"pointer"}}>
+                        <span onClick={()=>toggleTarget(h)} style={{color:sel?"#00f0ff":"#3e3e5c",flex:"0 0 16px",cursor:"pointer",fontSize:"13px"}}>{sel?"●":"○"}</span>
+                        <span onClick={()=>toggleTarget(h)} style={{flex:"0 0 200px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:sel?"#00f0ff":"#7878a0",fontSize:"13px",cursor:"pointer"}}>{h}</span>
+                        {hv?.ansible_host&&<span style={{color:"#2d2d42",fontSize:"12px",flex:"0 0 120px"}}>{hv.ansible_host}</span>}
+                        {/* Tags display — click to edit */}
+                        <div onClick={(e)=>{e.stopPropagation();setEditingHostTags(isEditing?null:h);setEditTagInput("");}} style={{flex:1,display:"flex",flexWrap:"wrap",gap:"4px",cursor:"pointer",minHeight:"20px",padding:"2px 4px",borderRadius:"3px"}}
+                          onMouseEnter={e=>e.currentTarget.style.background="#ffffff05"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                          {htags.length>0?htags.map(t=>(
+                            <span key={t} style={{padding:"1px 6px",background:"#ffb30010",border:"1px solid #ffb30030",color:"#ffb300",borderRadius:"3px",fontSize:"10px"}}>{t}</span>
+                          )):<span style={{color:"#2d2d42",fontSize:"10px",fontStyle:"italic"}}>+ tags</span>}
+                        </div>
+                      </div>
+                      {/* Inline tag editor */}
+                      {isEditing&&(
+                        <div style={{background:"#151522",border:"1px solid #ffb30033",borderTop:"none",borderRadius:"0 0 4px 4px",padding:"8px 12px 8px 38px",display:"flex",flexDirection:"column",gap:"6px"}} onClick={e=>e.stopPropagation()}>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
+                            {htags.map(t=>(
+                              <span key={t} style={{padding:"2px 8px",background:"#ffb30015",border:"1px solid #ffb30040",color:"#ffb300",borderRadius:"3px",fontSize:"11px",display:"flex",alignItems:"center",gap:"6px"}}>
+                                {t}
+                                <span onClick={()=>removeTagFromHost(h,t)} style={{cursor:"pointer",color:"#ff336688",fontSize:"12px",fontWeight:700}} onMouseEnter={e=>e.currentTarget.style.color="#ff3366"} onMouseLeave={e=>e.currentTarget.style.color="#ff336688"}>×</span>
+                              </span>
+                            ))}
+                          </div>
+                          <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+                            <input value={editTagInput} onChange={e=>setEditTagInput(e.target.value.replace(/[^a-z0-9_-]/gi,"").toLowerCase())}
+                              onKeyDown={e=>{if(e.key==="Enter"&&editTagInput){addTagToHost(h,editTagInput);setEditTagInput("");}if(e.key==="Escape")setEditingHostTags(null);}}
+                              placeholder="new tag (Enter to add)" autoFocus
+                              style={{...S.input,width:"200px",padding:"3px 8px",fontSize:"12px"}}/>
+                            {/* Quick-add from existing tags */}
+                            {allTags.filter(t=>!htags.includes(t)&&t.includes(editTagInput)).slice(0,6).map(t=>(
+                              <button key={t} onClick={()=>{addTagToHost(h,t);setEditTagInput("");}} style={{
+                                padding:"2px 8px",background:"transparent",border:"1px solid #252538",color:"#50507a",
+                                borderRadius:"3px",cursor:"pointer",fontSize:"10px",fontFamily:"'JetBrains Mono',monospace",
+                              }}>{t}</button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>);})}
+                  </div>
+                </div>)}
+              </div>)}
+
+              {/* ── ROLES ── */}
+              {tab==="roles"&&(<div>
+                <div style={{display:"flex",gap:"10px",marginBottom:"16px"}}>
+                  <input placeholder="Filter roles..." value={searchFilter} onChange={e=>setSearchFilter(e.target.value)} style={{...S.input,flex:1}}/>
+                  <button onClick={()=>setShowRoleCreator(!showRoleCreator)} style={S.btn(showRoleCreator)}>{showRoleCreator?"Cancel":"+ New Role"}</button>
+                </div>
+                {showRoleCreator&&(<div style={{background:"#151522",border:"1px solid #00f0ff33",borderRadius:"8px",padding:"16px",marginBottom:"16px"}}>
+                  <div style={{...S.label,color:"#00f0ff"}}>Create Role</div>
+                  <input placeholder="role_name" value={newRole.name} onChange={e=>setNewRole({...newRole,name:e.target.value.replace(/[^a-z0-9_-]/g,"")})} style={{...S.input,marginBottom:"8px"}}/>
+                  <input placeholder="Description" value={newRole.description} onChange={e=>setNewRole({...newRole,description:e.target.value})} style={{...S.input,marginBottom:"8px"}}/>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:"8px"}}><span style={{color:"#7878a0",fontSize:"11px"}}>DEFAULT VARS</span><button onClick={()=>setNewRoleVars([...newRoleVars,{key:"",default:""}])} style={{...S.btn(false),padding:"2px 10px",fontSize:"11px"}}>+ var</button></div>
+                  {newRoleVars.map((v,i)=><div key={i} style={{display:"flex",gap:"8px",marginBottom:"6px"}}><input placeholder="var_name" value={v.key} onChange={e=>{const nv=[...newRoleVars];nv[i]={...nv[i],key:e.target.value.replace(/[^a-z0-9_]/g,"")};setNewRoleVars(nv);}} style={{...S.input,fontSize:"12px"}}/><input placeholder="default" value={v.default} onChange={e=>{const nv=[...newRoleVars];nv[i]={...nv[i],default:e.target.value};setNewRoleVars(nv);}} style={{...S.input,fontSize:"12px"}}/><button onClick={()=>setNewRoleVars(newRoleVars.filter((_,idx)=>idx!==i))} style={{background:"transparent",border:"none",color:"#ff3366",cursor:"pointer"}}>×</button></div>)}
+                  <div style={{textAlign:"right",marginTop:"10px"}}><button onClick={createNewRole} disabled={!newRole.name} style={{...S.btn(!!newRole.name),padding:"8px 20px",fontWeight:700}}>Create Role</button></div>
+                </div>)}
+                <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                  {filteredRoles.map(role=>{const added=play.roles.find(r=>r.name===role.name),desc=role.meta?.galaxy_info?.description||"",vc=Object.keys(role.vars||{}).length;
+                  return(<div key={role.name} style={{background:added?"#00f0ff08":"#151522",border:added?"1px solid #00f0ff33":"1px solid #1c1c2e",borderRadius:"6px",padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><span style={{color:added?"#00f0ff":"#d0d0e0",fontWeight:500,fontSize:"13px"}}>{role.name}</span>{desc&&<span style={{color:"#50507a",fontSize:"11px",marginLeft:"10px"}}>{desc}</span>}</div>
+                    <div style={{display:"flex",gap:"6px"}}><button onClick={()=>loadRoleDetail(role.name)} style={{...S.btn(roleDetail?.name===role.name,"#a78bfa"),padding:"3px 10px",fontSize:"11px"}}>View</button><button onClick={()=>added?removeRole(role.name):addRole(role)} style={{...S.btn(false,added?"#ff3366":"#00f0ff"),padding:"3px 12px",fontSize:"11px"}}>{added?"Remove":"Add"}</button></div></div>
+                    <div style={{marginTop:"4px",color:"#3e3e5c",fontSize:"11px"}}>{role.structure?.join(" | ")}{vc>0&&<span style={{marginLeft:"8px"}}>({vc} defaults)</span>}</div>
+                  </div>);})}
+                </div>
+              </div>)}
+
+              {/* ── ROLE VARS ── */}
+              {tab==="vars"&&(<div>
+                {play.roles.length===0?<div style={{color:"#50507a",padding:"40px 0",textAlign:"center",fontSize:"13px"}}>Add roles to configure overrides</div>
+                :play.roles.map((pr,idx)=>{const rd=allRoles.find(r=>r.name===pr.name),defs=rd?.vars||{};
+                return(<div key={pr.name} style={{background:"#151522",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"14px",marginBottom:"12px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"12px"}}><div style={{display:"flex",alignItems:"center",gap:"8px"}}><span style={{color:"#00f0ff",fontWeight:700,fontSize:"13px"}}>{idx+1}. {pr.name}</span><button onClick={()=>loadRoleDetail(pr.name)} style={{...S.btn(false,"#a78bfa"),padding:"2px 8px",fontSize:"10px"}}>View</button><button onClick={()=>moveRole(idx,-1)} disabled={idx===0} style={S.btn(false)}>▲</button><button onClick={()=>moveRole(idx,1)} disabled={idx===play.roles.length-1} style={S.btn(false)}>▼</button></div><button onClick={()=>removeRole(pr.name)} style={{background:"transparent",border:"none",color:"#ff3366",cursor:"pointer"}}>×</button></div>
+                  {Object.keys(defs).length===0?<div style={{color:"#50507a",fontSize:"12px"}}>No defaults/main.yml found — <button onClick={()=>loadRoleDetail(pr.name)} style={{background:"transparent",border:"none",color:"#a78bfa",cursor:"pointer",fontSize:"12px",textDecoration:"underline"}}>view role files</button></div>:
+                  <div style={{display:"grid",gridTemplateColumns:"160px 1fr",gap:"8px",alignItems:"center"}}>{Object.entries(defs).map(([k,v])=><React.Fragment key={k}><label style={{color:"#7878a0",fontSize:"12px",textAlign:"right"}}>{k}</label><input value={pr.overrides?.[k]??""} placeholder={String(v??"")} onChange={e=>updateOverride(pr.name,k,e.target.value)} style={{...S.input,fontSize:"12px"}}/></React.Fragment>)}</div>}
+                </div>);})}
+              </div>)}
+
+              {/* ── HOST/GROUP VARS ── */}
+              {tab==="hostvars"&&(<div>
+                {play.targets.length===0?<div style={{color:"#50507a",padding:"40px 0",textAlign:"center",fontSize:"13px"}}>Select targets to view/edit vars</div>:
+                <div>
+                  {/* GROUP VARS */}
+                  {Object.keys(resolvedGroupVars).length>0&&<div style={{marginBottom:"24px"}}><div style={{...S.label,color:"#00ff88"}}>group_vars/ ({env}) <span style={{color:"#3e3e5c",fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>— click values to edit, Enter to save</span></div>
+                  {Object.entries(resolvedGroupVars).map(([group,vars])=><EditableVarTable key={group} title={group} vars={vars} color="#00ff88"
+                    onSave={async(updated)=>{try{await API.put(`/inventory/${env}/group_vars/${group}`,{vars:updated});loadInventory();}catch(e){alert(e);}}}
+                    onVault={(k,v)=>{setVaultInput({name:k,value:String(v)});setTab("vault");encryptString(k,String(v));}}
+                  />)}</div>}
+                  {/* HOST VARS */}
+                  {Object.keys(resolvedHostVars).length>0&&<div><div style={{...S.label,color:"#ffb300"}}>host_vars/ ({env}) <span style={{color:"#3e3e5c",fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>— click values to edit, Enter to save</span></div>
+                  {Object.entries(resolvedHostVars).map(([host,vars])=><EditableVarTable key={host} title={host} vars={vars} color="#ffb300"
+                    onSave={async(updated)=>{try{await API.put(`/inventory/${env}/host_vars/${host}`,{vars:updated});loadInventory();}catch(e){alert(e);}}}
+                    onVault={(k,v)=>{setVaultInput({name:k,value:String(v)});setTab("vault");encryptString(k,String(v));}}
+                  />)}</div>}
+                </div>}
+              </div>)}
+
+              {/* ── RUN ── */}
+              {tab==="run"&&(<div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 120px)"}}>
+                <div style={S.label}>Execute</div>
+                <div style={{background:"#151522",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"14px",marginBottom:"16px",flexShrink:0}}>
+                  {/* Mode selector */}
+                  <div style={{display:"flex",gap:"8px",marginBottom:"12px"}}>
+                    <button onClick={()=>setPlay({...play,mode:"ondemand"})} style={{...S.btn(play.mode==="ondemand","#00ff88"),padding:"6px 14px",fontSize:"12px"}}>On-Demand</button>
+                    <button onClick={()=>setPlay({...play,mode:"scheduled"})} style={{...S.btn(play.mode==="scheduled","#ff2d7f"),padding:"6px 14px",fontSize:"12px"}}>Scheduled</button>
+                    <span style={{color:"#50507a",fontSize:"11px",alignSelf:"center",marginLeft:"8px"}}>{play.mode==="ondemand"?'hosts: "{{ host }}" — targets passed via -e host= at runtime':'Hardcoded hosts — for cron scheduling'}</span>
+                  </div>
+                  {/* Command preview */}
+                  <div style={{fontSize:"12px",color:"#7878a0",marginBottom:"10px"}}>
+                    <span style={{color:"#00ff88"}}>ansible-playbook</span> [generated] -i inventories/{env}
+                    {play.targets.length>0&&(play.mode==="ondemand"
+                      ?<span style={{color:"#ffb300"}}> -e host={buildLimit(play.targets)}</span>
+                      :<span> --limit {buildLimit(play.targets)}</span>
+                    )}
+                  </div>
+                  <div style={{display:"flex",gap:"16px"}}><Toggle value={play.become} onChange={v=>setPlay({...play,become:v})} label="become"/><Toggle value={play.gatherFacts} onChange={v=>setPlay({...play,gatherFacts:v})} label="gather_facts"/></div>
+                  <div style={{marginTop:"10px"}}><label style={{color:"#7878a0",fontSize:"11px"}}>serial</label><input value={play.serial} onChange={e=>setPlay({...play,serial:e.target.value})} placeholder="e.g. 5 or 25%" style={{...S.input,width:"150px",marginTop:"4px"}}/></div>
+                </div>
+                <div style={{display:"flex",gap:"10px",marginBottom:"12px",flexShrink:0}}>
+                  <button onClick={()=>handleRun(false,false)} disabled={running||!play.targets.length||!play.roles.length} style={{...S.btn(!running&&play.targets.length&&play.roles.length,"#00ff88"),flex:1,padding:"12px",fontWeight:700,fontSize:"13px"}}>{running?"Running...":"Run"}</button>
+                  <button onClick={()=>handleRun(true,false)} disabled={running||!play.targets.length||!play.roles.length} style={{...S.btn(!running&&play.targets.length&&play.roles.length,"#00f0ff"),padding:"12px 16px",fontSize:"13px"}}>Save & Run</button>
+                  <button onClick={()=>handleRun(false,true)} disabled={running||!play.targets.length||!play.roles.length} style={{...S.btn(false),padding:"12px 16px",fontSize:"13px"}}>--check</button>
+                  {running&&<button onClick={killRun} style={{background:"#ff3366",color:"#fff",border:"none",padding:"12px 20px",borderRadius:"4px",cursor:"pointer",fontSize:"13px",fontWeight:700,fontFamily:"'JetBrains Mono',monospace",boxShadow:"0 0 15px #ff336666, 0 0 30px #ff336633",animation:"glow 2s infinite"}}>⛔ STOP</button>}
+                </div>
+                {/* Streaming output — fills remaining space */}
+                {(runLines.length>0||running)&&<div style={{display:"flex",flexDirection:"column",flex:1,minHeight:0}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px",flexShrink:0}}>
+                    <div style={{...S.label,...(runResult?{color:runResult.success?"#00ff88":"#ff3366"}:{color:"#7878a0"})}}>{running?"RUNNING...":runResult?.killed?"KILLED":runResult?.success?"SUCCESS":`FAILED (rc=${runResult?.returncode})`}{runId&&<span style={{color:"#3e3e5c",marginLeft:"10px",fontSize:"10px"}}>id:{runId}</span>}</div>
+                    <button onClick={()=>setRunLines([])} style={{background:"transparent",border:"none",color:"#3e3e5c",cursor:"pointer",fontSize:"10px",fontFamily:"'JetBrains Mono',monospace"}}>clear</button>
+                  </div>
+                  <div ref={runLogRef} style={{background:"#0a0a16",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"12px",fontSize:"12px",lineHeight:"1.5",flex:1,overflow:"auto",minHeight:0}}>
+                    {runLines.map((l,i)=><div key={i} style={{color:l.type==="cmd"?"#a78bfa":l.type==="stdout"?"#e0e0f0":l.type==="stderr"?"#ff5577":l.type==="exit"?(l.code===0?"#00ff88":"#ff3366"):"#5e5e85",fontWeight:l.type==="cmd"?700:400,whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{l.type==="exit"?`\n  exit: ${l.code}${l.killed?" (killed)":""}`:l.data}</div>)}
+                    {running&&<span style={{color:"#00f0ff",animation:"blink 1s infinite"}}>_</span>}
+                  </div>
+                </div>}
+              </div>)}
+
+              {/* ── PLAYBOOKS ── */}
+              {tab==="playbooks"&&(<div>
+                <div style={S.label}>Playbooks in Repo</div>
+                <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                  {playbooks.map(pb=><div key={pb.path} style={{background:"#151522",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+                      <div><span style={{color:"#ff2d7f",fontSize:"13px"}}>{pb.path}</span>{pb.name&&<span style={{color:"#50507a",fontSize:"11px",marginLeft:"10px"}}>{pb.name}</span>}</div>
+                      <div style={{display:"flex",gap:"6px"}}>
+                        <button onClick={()=>{setSelectedPlaybook(pb);setPreviewTab("existing");}} style={{...S.btn(false,"#a78bfa"),padding:"3px 10px",fontSize:"11px"}}>View</button>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
+                      <input placeholder="host or group to target" value={pb._targets||""} onChange={e=>{const updated=playbooks.map(p=>p.path===pb.path?{...p,_targets:e.target.value}:p);setPlaybooks(updated);}} style={{...S.input,flex:1,fontSize:"11px",padding:"4px 8px"}}/>
+                      <button onClick={()=>runExistingPlaybook(pb,pb._targets||"",false)} disabled={running} style={{...S.btn(!running,"#00ff88"),padding:"4px 12px",fontSize:"11px"}}>Run</button>
+                      <button onClick={()=>runExistingPlaybook(pb,pb._targets||"",true)} disabled={running} style={{...S.btn(false),padding:"4px 12px",fontSize:"11px"}}>--check</button>
+                    </div>
+                  </div>)}
+                </div>
+              </div>)}
+
+              {/* ── INVENTORY EDITOR ── */}
+              {tab==="inventory"&&(<div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"16px"}}>
+                  <div style={S.label}>Inventory — {env}</div>
+                  <button onClick={()=>{if(invEditMode&&invRaw!==inventory?.hosts_raw)saveInvRaw();setInvEditMode(!invEditMode);}} style={S.btn(invEditMode,"#ffb300")}>{invEditMode?"Save Raw":"Edit Raw"}</button>
+                </div>
+                {invEditMode?(<div>
+                  <textarea value={invRaw} onChange={e=>setInvRaw(e.target.value)} style={{width:"100%",minHeight:"500px",background:"#0c0c14",color:"#ffb300",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"16px",fontSize:"12px",lineHeight:"1.6",fontFamily:"'JetBrains Mono',monospace",resize:"vertical",boxSizing:"border-box"}}/>
+                </div>):(<div>
+                  {/* Add Host */}
+                  <div style={{background:"#151522",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"14px",marginBottom:"16px"}}>
+                    <div style={{...S.label,fontSize:"11px"}}>Add Host</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr auto",gap:"8px"}}>
+                      <input placeholder="hostname" value={newHost.hostname} onChange={e=>setNewHost({...newHost,hostname:e.target.value})} style={{...S.input,fontSize:"12px"}}/>
+                      <input placeholder="ansible_host (IP)" value={newHost.ansible_host} onChange={e=>setNewHost({...newHost,ansible_host:e.target.value})} style={{...S.input,fontSize:"12px"}}/>
+                      <input placeholder="host_tags (comma sep)" value={newHost.host_tags} onChange={e=>setNewHost({...newHost,host_tags:e.target.value})} style={{...S.input,fontSize:"12px"}}/>
+                      <button onClick={addHostToInv} disabled={!newHost.hostname} style={{...S.btn(!!newHost.hostname,"#ffb300"),fontSize:"12px"}}>Add</button>
+                    </div>
+                  </div>
+                  {/* Add Group */}
+                  <div style={{background:"#151522",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"14px",marginBottom:"16px"}}>
+                    <div style={{...S.label,fontSize:"11px"}}>Add Group</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 2fr auto",gap:"8px"}}>
+                      <input placeholder="group_name" value={newGroup.name} onChange={e=>setNewGroup({...newGroup,name:e.target.value})} style={{...S.input,fontSize:"12px"}}/>
+                      <input placeholder="hosts (comma sep hostnames)" value={newGroup.hosts} onChange={e=>setNewGroup({...newGroup,hosts:e.target.value})} style={{...S.input,fontSize:"12px"}}/>
+                      <button onClick={addGroupToInv} disabled={!newGroup.name} style={{...S.btn(!!newGroup.name,"#00ff88"),fontSize:"12px"}}>Add</button>
+                    </div>
+                  </div>
+                  {/* Host list */}
+                  <div style={S.label}>Hosts ({allHosts.length})</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:"3px",maxHeight:"400px",overflowY:"auto"}}>
+                    {allHosts.map(h=>{const hv=inventory?.hosts_parsed?.all?.hosts?.[h];
+                    return(<div key={h} style={{display:"flex",alignItems:"center",gap:"10px",padding:"6px 12px",background:"#151522",borderRadius:"4px"}}>
+                      <span style={{color:"#ffb300",fontSize:"12px",flex:1}}>{h}</span>
+                      {hv?.ansible_host&&<span style={{color:"#50507a",fontSize:"11px"}}>{hv.ansible_host}</span>}
+                      {hv?.host_tags?.length>0&&<span style={{color:"#2d2d42",fontSize:"10px"}}>{hv.host_tags.slice(0,3).join(", ")}{hv.host_tags.length>3&&"..."}</span>}
+                      <button onClick={()=>removeHostFromInv(h)} style={{background:"transparent",border:"none",color:"#ff336666",cursor:"pointer",fontSize:"12px"}}>×</button>
+                    </div>);})}
+                  </div>
+                </div>)}
+              </div>)}
+
+              {/* ── SCHEDULES ── */}
+              {tab==="cron"&&(<div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"16px"}}>
+                  <div style={S.label}>Scheduled Jobs</div>
+                  <button onClick={()=>setShowNewSched(!showNewSched)} style={S.btn(showNewSched,"#ff2d7f")}>{showNewSched?"Cancel":"+ New Schedule"}</button>
+                </div>
+                {showNewSched&&(<div style={{background:"#151522",border:"1px solid #ff2d7f33",borderRadius:"6px",padding:"14px",marginBottom:"16px"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px"}}>
+                    <input placeholder="Schedule name" value={newSched.name} onChange={e=>setNewSched({...newSched,name:e.target.value})} style={S.input}/>
+                    <input placeholder="Cron: min hour dom mon dow" value={newSched.cron_expr} onChange={e=>setNewSched({...newSched,cron_expr:e.target.value})} style={S.input}/>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:"8px",marginBottom:"8px"}}>
+                    <select value={newSched.playbook} onChange={e=>setNewSched({...newSched,playbook:e.target.value})} style={S.input}>
+                      <option value="">Select playbook...</option>
+                      {playbooks.map(p=><option key={p.path} value={p.path}>{p.path}</option>)}
+                    </select>
+                    <input placeholder="--limit targets" value={newSched.targets} onChange={e=>setNewSched({...newSched,targets:e.target.value})} style={S.input}/>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{color:"#5e5e85",fontSize:"11px"}}>Examples: <span style={{color:"#ff2d7f"}}>0 2 * * *</span> (2AM daily), <span style={{color:"#ff2d7f"}}>*/30 * * * *</span> (every 30min), <span style={{color:"#ff2d7f"}}>0 0 * * 0</span> (weekly Sun)</div>
+                    <button onClick={createSchedule} disabled={!newSched.name||!newSched.cron_expr||!newSched.playbook} style={{...S.btn(newSched.name&&newSched.cron_expr&&newSched.playbook,"#ff2d7f"),fontWeight:700}}>Create</button>
+                  </div>
+                </div>)}
+                {schedules.length===0?<div style={{color:"#50507a",padding:"30px",textAlign:"center",fontSize:"13px"}}>No scheduled jobs</div>:
+                <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                  {schedules.map(s=><div key={s.id} style={{background:"#151522",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+                        <span style={{width:"8px",height:"8px",borderRadius:"50%",background:s.enabled?"#00ff88":"#50507a"}}/>
+                        <span style={{color:"#ff2d7f",fontSize:"13px",fontWeight:500}}>{s.name}</span>
+                        <span style={{color:"#50507a",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace"}}>{s.cron_expr}</span>
+                      </div>
+                      <div style={{display:"flex",gap:"6px"}}>
+                        <button onClick={async()=>{await API.post(`/schedules/${s.id}/run`);loadSchedules();}} style={{...S.btn(false,"#00ff88"),padding:"3px 10px",fontSize:"11px"}}>Run Now</button>
+                        <button onClick={()=>{loadSchedLogs(s.id);setSelectedSched(s);}} style={{...S.btn(selectedSched?.id===s.id,"#a78bfa"),padding:"3px 10px",fontSize:"11px"}}>Logs</button>
+                        <button onClick={async()=>{await API.put(`/schedules/${s.id}`,{...s,enabled:!s.enabled});loadSchedules();}} style={{...S.btn(false,s.enabled?"#50507a":"#00ff88"),padding:"3px 10px",fontSize:"11px"}}>{s.enabled?"Disable":"Enable"}</button>
+                        <button onClick={async()=>{if(confirm(`Delete schedule "${s.name}"?`)){await API.del(`/schedules/${s.id}`);loadSchedules();}}} style={{...S.btn(false,"#ff3366"),padding:"3px 10px",fontSize:"11px"}}>×</button>
+                      </div>
+                    </div>
+                    <div style={{color:"#3e3e5c",fontSize:"11px"}}>
+                      {s.playbook} {s.targets&&<span>--limit {s.targets}</span>}
+                      {s.last_run&&<span style={{marginLeft:"12px"}}>Last: <span style={{color:s.last_status==="ok"?"#00ff88":"#ff3366"}}>{s.last_status}</span> ({new Date(s.last_run).toLocaleString()})</span>}
+                      <span style={{marginLeft:"12px"}}>Runs: {s.run_count||0}</span>
+                    </div>
+                  </div>)}
+                </div>}
+                {/* Log viewer */}
+                {selectedSched&&schedLogs.length>0&&(<div style={{marginTop:"16px"}}>
+                  <div style={S.label}>Logs — {selectedSched.name}</div>
+                  {schedLogs.map((l,i)=><div key={i} style={{background:"#0c0c14",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"10px",marginBottom:"8px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:"6px",fontSize:"11px"}}>
+                      <span style={{color:l.success?"#00ff88":"#ff3366"}}>{l.success?"SUCCESS":"FAILED"}</span>
+                      <span style={{color:"#50507a"}}>{new Date(l.started).toLocaleString()} — {l.duration_seconds?.toFixed(1)}s</span>
+                    </div>
+                    <pre style={{fontSize:"10px",lineHeight:"1.4",color:"#7878a0",maxHeight:"150px",overflow:"auto",whiteSpace:"pre-wrap"}}>{l.output?.slice(-3000)}</pre>
+                  </div>)}
+                </div>)}
+              </div>)}
+
+              {/* ── VAULT ── */}
+              {tab==="vault"&&(<div>
+                <div style={S.label}>Vault Encrypt String</div>
+                <div style={{background:"#151522",border:"1px solid #ffb30033",borderRadius:"6px",padding:"16px",marginBottom:"16px"}}>
+                  <div style={{color:"#7878a0",fontSize:"11px",marginBottom:"12px"}}>Encrypt a value using <span style={{color:"#ffb300"}}>ansible-vault encrypt_string</span>. The output is an inline <span style={{color:"#ffb300"}}>!vault</span> block you can paste directly into any YAML var file.</div>
+                  <div style={{display:"grid",gridTemplateColumns:"120px 1fr",gap:"8px",marginBottom:"10px"}}>
+                    <label style={{color:"#7878a0",fontSize:"12px",textAlign:"right",paddingTop:"6px"}}>var name</label>
+                    <input value={vaultInput.name} onChange={e=>setVaultInput({...vaultInput,name:e.target.value})} placeholder="e.g. ansible_become_password" style={S.input}/>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"120px 1fr",gap:"8px",marginBottom:"12px"}}>
+                    <label style={{color:"#7878a0",fontSize:"12px",textAlign:"right",paddingTop:"6px"}}>value</label>
+                    <textarea value={vaultInput.value} onChange={e=>setVaultInput({...vaultInput,value:e.target.value})} placeholder="secret value to encrypt" rows={3}
+                      style={{...S.input,resize:"vertical",minHeight:"40px"}}/>
+                  </div>
+                  <div style={{display:"flex",gap:"8px",justifyContent:"flex-end"}}>
+                    <button onClick={()=>encryptString(vaultInput.name,vaultInput.value)} disabled={!vaultInput.value||vaultLoading}
+                      style={{...S.btn(vaultInput.value&&!vaultLoading,"#ffb300"),padding:"8px 20px",fontWeight:700}}>{vaultLoading?"Encrypting...":"Encrypt"}</button>
+                  </div>
+                </div>
+                {vaultResult&&(
+                  <div style={{marginBottom:"16px"}}>
+                    {vaultResult.success?(
+                      <div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+                          <div style={{...S.label,color:"#00ff88"}}>Encrypted — copy this into your var file</div>
+                          <button onClick={()=>copyText(vaultResult.encrypted,"vault")} style={{...S.btn(copiedTarget==="vault","#00f0ff"),padding:"3px 10px",fontSize:"11px"}}>{copiedTarget==="vault"?"Copied!":"Copy"}</button>
+                        </div>
+                        <pre style={{background:"#0a0a16",border:"1px solid #ffb30044",borderRadius:"6px",padding:"14px",fontSize:"11px",lineHeight:"1.5",color:"#ffb300",whiteSpace:"pre-wrap",overflow:"auto",maxHeight:"300px"}}>{vaultResult.encrypted}</pre>
+                        <div style={{color:"#50507a",fontSize:"11px",marginTop:"8px"}}>
+                          Paste this into the appropriate <span style={{color:"#a78bfa"}}>group_vars/</span> or <span style={{color:"#a78bfa"}}>host_vars/</span> YAML file using the raw editor in the Inventory tab, or edit the file directly.
+                        </div>
+                      </div>
+                    ):(
+                      <div style={{color:"#ff3366",fontSize:"12px"}}>{vaultResult.error||"Encryption failed"}</div>
+                    )}
+                  </div>
+                )}
+                <div style={{borderTop:"1px solid #1c1c2e",paddingTop:"16px",marginTop:"8px"}}>
+                  <div style={S.label}>How Vault Variables Work</div>
+                  <div style={{color:"#5e5e85",fontSize:"12px",lineHeight:"1.7"}}>
+                    <p style={{marginBottom:"8px"}}><span style={{color:"#ffb300"}}>Simple values</span> — Click 🔒 on any variable in the Host/Grp Vars tab. The value is encrypted and the output shown here. Copy it into your var file replacing the plaintext value.</p>
+                    <p style={{marginBottom:"8px"}}><span style={{color:"#ffb300"}}>Nested values</span> (like <span style={{color:"#a78bfa"}}>users</span> lists) — Encrypt the sensitive fields individually (e.g. each <span style={{color:"#a78bfa"}}>password_hash</span>), then edit the YAML file to use the encrypted blocks inline.</p>
+                    <p style={{marginBottom:"8px"}}><span style={{color:"#ffb300"}}>Full file encryption</span> — Use the Terminal: <span style={{color:"#a78bfa"}}>ansible-vault encrypt inventories/prod/group_vars/vault.yml</span></p>
+                    <p>Variables showing as <span style={{color:"#ffb300",fontStyle:"italic"}}>vault-encrypted</span> are already protected.</p>
+                  </div>
+                </div>
+              </div>)}
+
+              {/* ── CFG ── */}
+              {tab==="cfg"&&(<div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
+                  <div style={S.label}>ansible.cfg</div>
+                  <button onClick={()=>{if(cfgEdit)saveCfg();else setCfgTemp(ansibleCfg);setCfgEdit(!cfgEdit);}} style={S.btn(cfgEdit,"#a78bfa")}>{cfgEdit?"Save":"Edit"}</button>
+                </div>
+                {cfgEdit?<textarea value={cfgTemp} onChange={e=>setCfgTemp(e.target.value)} style={{width:"100%",minHeight:"500px",background:"#0c0c14",color:"#a78bfa",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"16px",fontSize:"12px",lineHeight:"1.7",fontFamily:"'JetBrains Mono',monospace",resize:"vertical",boxSizing:"border-box"}}/>
+                :<pre style={{background:"#121220",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"16px",fontSize:"12px",lineHeight:"1.6",color:"#a78bfa",overflow:"auto",whiteSpace:"pre-wrap"}}>{ansibleCfg||"# No ansible.cfg"}</pre>}
+              </div>)}
+
+              {/* ── GIT ── */}
+              {tab==="git"&&(<div>
+                <div style={{display:"flex",gap:"10px",alignItems:"center",marginBottom:"16px"}}><span style={{color:"#7878a0",fontSize:"12px"}}>branch:</span><span style={{color:"#ff2d7f",fontSize:"13px",fontWeight:700}}>{gitStatus?.branch||"?"}</span><div style={{flex:1}}/><span style={{color:"#3e3e5c",fontSize:"11px"}}>{gitStatus?.remote}</span></div>
+                {gitStatus?.dirty_files?.length>0&&<div style={{marginBottom:"16px"}}><div style={S.label}>Changed ({gitStatus.dirty_files.length})</div><div style={{background:"#121220",border:"1px solid #1c1c2e",borderRadius:"6px",overflow:"hidden"}}>{gitStatus.dirty_files.map((f,i)=><div key={f.path} style={{display:"flex",alignItems:"center",gap:"10px",padding:"5px 12px",borderBottom:i<gitStatus.dirty_files.length-1?"1px solid #1a1a2c":"none"}}><span style={{fontSize:"10px",fontWeight:700,padding:"1px 5px",borderRadius:"3px",background:f.status.includes("M")?"#ffb30020":"#00ff8820",color:f.status.includes("M")?"#ffb300":"#00ff88"}}>{f.status}</span><span style={{color:"#c0c0d8",fontSize:"12px"}}>{f.path}</span></div>)}</div></div>}
+                <div style={{marginBottom:"16px"}}><div style={S.label}>Commit & Push</div><input placeholder="Commit message..." value={commitMsg} onChange={e=>setCommitMsg(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")handlePush();}} style={{...S.input,marginBottom:"10px"}}/><div style={{display:"flex",gap:"8px"}}><button onClick={handlePush} disabled={syncing||!commitMsg.trim()} style={{...S.btn(!syncing&&commitMsg.trim()),flex:1,padding:"10px",fontWeight:700}}>{syncing==="push"?"Pushing...":"Commit & Push"}</button><button onClick={handlePull} disabled={syncing} style={{...S.btn(!syncing),padding:"10px 20px"}}>{syncing==="pull"?"Pulling...":"Pull"}</button></div></div>
+                {syncLog.length>0&&<div style={{marginBottom:"16px"}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:"6px"}}><div style={S.label}>Output</div><button onClick={()=>setSyncLog([])} style={{background:"transparent",border:"none",color:"#3e3e5c",cursor:"pointer",fontSize:"10px"}}>clear</button></div><div style={{background:"#0a0a16",border:"1px solid #1c1c2e",borderRadius:"6px",padding:"10px",maxHeight:"160px",overflowY:"auto",fontSize:"11px",lineHeight:"1.6"}}>{syncLog.map((l,i)=><div key={i} style={{color:l.type==="cmd"?"#a78bfa":l.type==="success"?"#00ff88":l.type==="error"?"#ff3366":"#5e5e85"}}><span style={{color:"#2d2d42",marginRight:"8px"}}>{l.time}</span>{l.msg}</div>)}</div></div>}
+                <div style={S.label}>Recent Commits</div>{gitLog.map(c=><div key={c.hash} style={{display:"flex",gap:"10px",padding:"5px 0",borderBottom:"1px solid #111",alignItems:"center"}}><span style={{color:"#ff2d7f",fontSize:"11px",flex:"0 0 58px"}}>{c.hash}</span><span style={{color:"#c0c0d8",fontSize:"12px",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.message}</span><span style={{color:"#3e3e5c",fontSize:"11px",flex:"0 0 90px",textAlign:"right"}}>{c.time}</span></div>)}
+              </div>)}
+
+              {/* ── TERMINAL ── */}
+              {tab==="term"&&(<div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 120px)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}><div style={S.label}>Terminal <span style={{color:"#3e3e5c",fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>cwd: /repo</span></div><div style={{display:"flex",gap:"8px"}}>{termRunning&&<button onClick={()=>{if(wsRef.current?.readyState===1)wsRef.current.send(JSON.stringify({cmd:"SIGINT"}));}} style={{background:"#ff3366",color:"#fff",border:"none",padding:"4px 12px",borderRadius:"4px",cursor:"pointer",fontSize:"11px",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>Ctrl+C</button>}<button onClick={()=>setTermLines([])} style={{...S.btn(false),padding:"4px 12px",fontSize:"11px"}}>Clear</button></div></div>
+                <div ref={termRef} style={{flex:1,background:"#0a0a16",border:"1px solid #1c1c2e",borderRadius:"6px 6px 0 0",padding:"12px",overflow:"auto",fontSize:"12px",lineHeight:"1.6",minHeight:"200px"}}>
+                  {termLines.map((l,i)=><div key={i} style={{color:l.type==="cmd"?"#a78bfa":l.type==="stdout"?"#e0e0f0":l.type==="stderr"?"#ff5577":l.type==="exit"?(l.code===0?"#00ff88":"#ff3366"):"#5e5e85",fontWeight:l.type==="cmd"?700:400,whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{l.type==="exit"?`\n  exit: ${l.code}`:l.data}</div>)}
+                  {termRunning&&<span style={{color:"#00f0ff",animation:"blink 1s infinite"}}>_</span>}
+                </div>
+                <div style={{display:"flex",background:"#151522",border:"1px solid #1c1c2e",borderTop:"none",borderRadius:"0 0 6px 6px"}}><span style={{padding:"10px 8px 10px 14px",color:"#00f0ff",fontSize:"14px",fontWeight:700,textShadow:"0 0 8px #00f0ff66"}}>$</span><input value={termCmd} onChange={e=>setTermCmd(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!termRunning)sendTermCmd();if(e.key==="c"&&e.ctrlKey&&termRunning&&wsRef.current?.readyState===1)wsRef.current.send(JSON.stringify({cmd:"SIGINT"}));if(e.key==="ArrowUp"){e.preventDefault();const n=Math.min(historyIdx+1,termHistory.length-1);setHistoryIdx(n);if(termHistory[n])setTermCmd(termHistory[n]);}if(e.key==="ArrowDown"){e.preventDefault();const n=Math.max(historyIdx-1,-1);setHistoryIdx(n);setTermCmd(n>=0?termHistory[n]:"");}}} placeholder={termRunning?"Running... (Ctrl+C)":"ansible-playbook, git, ssh ..."} disabled={termRunning} style={{flex:1,background:"transparent",color:"#e0e0f0",border:"none",padding:"10px 14px 10px 4px",fontSize:"13px",fontFamily:"'JetBrains Mono',monospace"}}/></div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:"6px",marginTop:"10px"}}>
+                  {["ansible --version",`ansible-inventory -i inventories/${env} --graph`,"git status","git log --oneline -10"].map(cmd=><button key={cmd} onClick={()=>setTermCmd(cmd)} style={{background:"#151522",border:"1px solid #1c1c2e",color:"#5e5e85",padding:"4px 10px",borderRadius:"4px",cursor:"pointer",fontSize:"10px",fontFamily:"'JetBrains Mono',monospace"}}>{cmd}</button>)}
+                </div>
+              </div>)}
+
+            </div>
+          </div>
+
+          {/* ── DRAG HANDLE ── */}
+          <div onMouseDown={handleMouseDown} style={{width:"6px",cursor:"col-resize",background:dragging?"#00f0ff44":"#1c1c2e",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.background="#00f0ff33"} onMouseLeave={e=>{if(!dragging)e.currentTarget.style.background="#1c1c2e";}}>
+            <div style={{width:"2px",height:"40px",background:"#3e3e5c",borderRadius:"1px"}}/>
+          </div>
+
+          {/* ═══ RIGHT PREVIEW PANEL ═══ */}
+          <div style={{width:`${sidebarWidth}px`,flexShrink:0,background:"#10101a",display:"flex",flexDirection:"column"}}>
+            <div style={{display:"flex",borderBottom:"1px solid #1c1c2e",flexWrap:"wrap"}}>
+              {[{id:"playbook",label:"playbook.yml",color:"#b4ff39"},{id:"cfg",label:"ansible.cfg",color:"#a78bfa"},
+                ...(selectedPlaybook?[{id:"existing",label:selectedPlaybook.path,color:"#ff2d7f"}]:[]),
+                ...(roleDetail?[{id:"role",label:`${roleDetail.name}`,color:"#ffb300"}]:[]),
+              ].map(pt=><button key={pt.id} onClick={()=>setPreviewTab(pt.id)} style={{padding:"10px 12px",background:"transparent",border:"none",borderBottom:previewTab===pt.id?`2px solid ${pt.color}`:"2px solid transparent",color:previewTab===pt.id?pt.color:"#3e3e5c",fontFamily:"'JetBrains Mono',monospace",fontSize:"12px",cursor:"pointer",textShadow:previewTab===pt.id?`0 0 8px ${pt.color}44`:"none"}}>{pt.label}</button>)}
+              <div style={{flex:1}}/>
+              <button onClick={()=>{const t=previewTab==="playbook"?yaml:previewTab==="cfg"?ansibleCfg:previewTab==="existing"?(selectedPlaybook?.raw||""):previewTab==="role"?(roleDetail?.files?.[`${roleDetailTab}/main.yml`]||""):"";copyText(t,previewTab);}} style={{background:copiedTarget===previewTab?"#00f0ff":"transparent",border:"1px solid #222",color:copiedTarget===previewTab?"#0c0c14":"#50507a",padding:"4px 12px",borderRadius:"4px",cursor:"pointer",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",margin:"6px 8px"}}>{copiedTarget===previewTab?"Copied!":"Copy"}</button>
+              {previewTab==="playbook"&&<button onClick={savePlaybook} style={{background:"#00f0ff",color:"#0c0c14",border:"none",padding:"4px 12px",borderRadius:"4px",cursor:"pointer",fontSize:"11px",fontWeight:700,fontFamily:"'JetBrains Mono',monospace",margin:"6px 4px 6px 0"}}>Save</button>}
+            </div>
+            {previewTab==="role"&&roleDetail&&<div style={{display:"flex",borderBottom:"1px solid #1c1c2e",background:"#0c0c14"}}>
+              {["tasks","defaults","vars","handlers","meta"].map(sub=>{const has=roleDetail.files?.[`${sub}/main.yml`];return<button key={sub} onClick={()=>{setRoleDetailTab(sub);setRoleEditing(false);}} style={{padding:"6px 12px",background:"transparent",border:"none",borderBottom:roleDetailTab===sub?"2px solid #ffb300":"2px solid transparent",color:roleDetailTab===sub?"#ffb300":has?"#5e5e85":"#2d2d42",fontFamily:"'JetBrains Mono',monospace",fontSize:"11px",cursor:"pointer"}}>{sub}{!has&&" ∅"}</button>;})}
+              <div style={{flex:1}}/>
+              <button onClick={async()=>{
+                if(roleEditing){
+                  try{await API.put(`/role/${roleDetail.name}/${roleDetailTab}/main.yml`,{content:roleEditContent});
+                  const d=await API.get(`/role/${roleDetail.name}`);setRoleDetail(d);loadAll();setRoleEditing(false);}catch(e){alert(e);}
+                }else{setRoleEditContent(roleDetail.files?.[`${roleDetailTab}/main.yml`]||`---\n# ${roleDetailTab}/main.yml for ${roleDetail.name}\n`);setRoleEditing(true);}
+              }} style={{background:roleEditing?"#ffb300":"transparent",border:roleEditing?"none":"1px solid #333",color:roleEditing?"#0c0c14":"#7878a0",padding:"4px 12px",borderRadius:"4px",cursor:"pointer",fontSize:"10px",fontWeight:roleEditing?700:400,fontFamily:"'JetBrains Mono',monospace",margin:"4px 8px"}}>{roleEditing?"Save":"Edit"}</button>
+              {roleEditing&&<button onClick={()=>setRoleEditing(false)} style={{background:"transparent",border:"1px solid #333",color:"#7878a0",padding:"4px 10px",borderRadius:"4px",cursor:"pointer",fontSize:"10px",fontFamily:"'JetBrains Mono',monospace",margin:"4px 4px 4px 0"}}>Cancel</button>}
+            </div>}
+            {/* Content area — textarea when editing role, pre otherwise */}
+            {previewTab==="role"&&roleEditing?(
+              <textarea value={roleEditContent} onChange={e=>setRoleEditContent(e.target.value)} style={{flex:1,padding:"20px",margin:0,background:"#10101a",color:"#ffb300",border:"none",fontSize:"12px",lineHeight:"1.7",fontFamily:"'JetBrains Mono',monospace",resize:"none",outline:"none",boxSizing:"border-box"}}/>
+            ):(
+              <pre style={{flex:1,padding:"20px",margin:0,overflow:"auto",fontSize:"12px",lineHeight:"1.7",color:previewTab==="playbook"?"#b4ff39":previewTab==="cfg"?"#a78bfa":previewTab==="role"?"#ffb300":"#ff2d7f",whiteSpace:"pre-wrap",wordBreak:"break-all"}}>
+                {previewTab==="playbook"&&yaml}
+                {previewTab==="cfg"&&(ansibleCfg||"# No ansible.cfg")}
+                {previewTab==="existing"&&(selectedPlaybook?.raw||"")}
+                {previewTab==="role"&&(roleDetail?.files?.[`${roleDetailTab}/main.yml`]||`# No ${roleDetailTab}/main.yml`)}
+              </pre>
+            )}
+            <div style={{borderTop:"1px solid #1c1c2e",padding:"10px 16px",display:"flex",gap:"14px",fontSize:"11px",color:"#50507a",flexWrap:"wrap"}}>
+              <span>env: <span style={{color:"#a78bfa"}}>{env}</span></span>
+              <span>targets: <span style={{color:play.targets.length?"#00f0ff":"#50507a"}}>{play.targets.length}</span></span>
+              <span>roles: <span style={{color:play.roles.length?"#00f0ff":"#50507a"}}>{play.roles.length}</span></span>
+              <span>git: <span style={{color:dirtyCount?"#ffb300":"#00ff88"}}>{dirtyCount?`${dirtyCount} dirty`:"clean"}</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

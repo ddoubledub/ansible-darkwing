@@ -1,0 +1,4 @@
+---
+# Variables that apply to all hosts in this environment.
+# ansible_user: your_ssh_user
+# ansible_become: true

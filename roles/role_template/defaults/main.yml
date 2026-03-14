@@ -1,0 +1,28 @@
+---
+# =============================================================================
+# defaults/main.yml  —  LOWEST-PRIORITY variables
+# =============================================================================
+# These are the role's default values. They can be overridden (lowest to
+# highest priority) by:
+#   inventory group_vars  →  inventory host_vars  →  playbook vars:  →
+#   extra-vars (-e)  →  vars/main.yml (see below)
+#
+# Put safe, sensible defaults here so the role works out of the box.
+# Users only need to override what their environment requires.
+# =============================================================================
+
+# Name of the package this role manages.
+# TODO: Replace with your actual package name.
+example_package: htop
+
+# Directory where the application config lives on the target host.
+example_config_dir: /etc/example
+
+# List of users to create. Empty by default — override in your inventory or
+# playbook vars block.
+# Example override in a playbook:
+#   vars:
+#     example_users:
+#       - alice
+#       - bob
+example_users: []

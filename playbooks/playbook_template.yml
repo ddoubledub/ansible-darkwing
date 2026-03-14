@@ -1,0 +1,40 @@
+---
+# =============================================================================
+# playbook_template.yml — Starting point for new playbooks
+# =============================================================================
+# Copy this file and rename it, then fill in the hosts, vars, and roles.
+#
+# Usage:
+#   ansible-playbook playbooks/your-playbook.yml
+#   ansible-playbook playbooks/your-playbook.yml --limit group_or_host
+#   ansible-playbook playbooks/your-playbook.yml --check   # dry run
+# =============================================================================
+
+- name: Describe what this play does
+  hosts: "{{ target | default('linux') }}"  # override with --limit or -e target=web
+  gather_facts: true                         # set false if you don't need OS facts
+  become: true                               # set false if no root needed
+
+  vars:
+    # Inline variables — prefer group_vars or host_vars for anything reusable
+    # my_var: value
+
+  pre_tasks:
+    # pre_tasks run before roles, in order. Use for validation or setup.
+    - name: Example pre-task — verify required variable is defined
+      ansible.builtin.assert:
+        that: my_var is defined
+        fail_msg: "my_var must be set"
+      when: false  # remove the 'when: false' to enable
+
+  roles:
+    # Roles run in order. Each role should be idempotent (safe to run twice).
+    # - role: your_role_name
+    #   vars:
+    #     role_specific_var: value
+
+  post_tasks:
+    # post_tasks run after all roles complete.
+    - name: Example post-task — print completion message
+      ansible.builtin.debug:
+        msg: "Play complete on {{ inventory_hostname }}"

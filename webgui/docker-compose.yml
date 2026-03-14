@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────
+# Ansible Playbook Builder - Docker Compose
+# ─────────────────────────────────────────────────────────────
+#
+# Usage:
+#   cp .env.example .env      # edit with your values
+#   docker compose up -d --build
+#
+# Uses host networking so ansible can SSH to your real targets.
+# Caddy handles TLS automatically (self-signed for internal domains).
+# ─────────────────────────────────────────────────────────────
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        ANSIBLE_VERSION: "${ANSIBLE_VERSION:-2.17.*}"
+    container_name: ansible-gui
+    restart: unless-stopped
+
+    # HOST NETWORKING: the container shares the host's network stack.
+    # This means ansible-playbook inside the container can SSH to your targets
+    # exactly as if you ran it on the host. Same IPs, same routes, same DNS.
+    network_mode: host
+
+    volumes:
+      # Your ansible repo (read-write for edits + git operations)
+      - ${ANSIBLE_REPO_PATH:?Set ANSIBLE_REPO_PATH in .env}:/repo
+      # SSH keys for git push/pull AND ansible SSH to targets
+      - ${SSH_KEY_PATH:-/home/ansible/.ssh}:/root/.ssh:ro
+
+      # Git identity (user.name, user.email, safe.directory)
+      - ${GITCONFIG_PATH:-/home/ansible/.gitconfig}:/root/.gitconfig:ro
+
+      # SAML config (only needed if SAML_ENABLED=true)
+      - ./saml:/app/saml:ro
+
+      # Vault password file (optional)
+      - ${VAULT_PASS_FILE:-/dev/null}:/root/.vault_pass:ro
+
+      # If you have a custom ansible.cfg outside the repo, mount it too:
+      # - /etc/ansible/ansible.cfg:/etc/ansible/ansible.cfg:ro
+    environment:
+      - ANSIBLE_REPO=/repo
+      - SAML_ENABLED=${SAML_ENABLED:-false}
+      - BASIC_AUTH_ENABLED=${BASIC_AUTH_ENABLED:-true}
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER:-admin}
+      - BASIC_AUTH_PASS=${BASIC_AUTH_PASS}
+      - SESSION_SECRET=${SESSION_SECRET:?Set SESSION_SECRET in .env}
+      - SESSION_MAX_AGE=${SESSION_MAX_AGE:-28800}
+      - MAX_CONCURRENT_RUNS=${MAX_CONCURRENT_RUNS:-3}
+      - ANSIBLE_VAULT_PASSWORD_FILE=/root/.vault_pass
+      - GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+      - ANSIBLE_CONFIG=/repo/ansible.cfg
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8420/api/health')"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+
+  # Caddy reverse proxy — handles TLS automatically
+  # Connects to app on localhost:8420 (host networking)
+  caddy:
+    image: caddy:2-alpine
+    container_name: ansible-gui-proxy
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - DOMAIN=${DOMAIN:?Set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,72 @@
+---
+# =============================================================================
+# tasks/main.yml
+# =============================================================================
+# This is where your role does its work. Tasks run top-to-bottom on every host
+# in the play unless you add conditionals (when:) or limit them with tags.
+#
+# TIPS FOR BEGINNERS:
+#   - Use fully-qualified module names (ansible.builtin.X) to avoid ambiguity.
+#   - Always set become: true on tasks that need root — not on the whole play.
+#   - Use register: to capture command output, then check it with when: or debug:.
+#   - Prefer idempotent modules (package, user, copy, template, lineinfile) over
+#     raw shell commands whenever possible.
+# =============================================================================
+
+# --- Example 1: Install a package -------------------------------------------
+- name: Install example package
+  ansible.builtin.package:
+    name: "{{ example_package }}"   # defined in defaults/main.yml
+    state: present
+  become: true
+
+# --- Example 2: Create a directory with safe permissions --------------------
+- name: Ensure config directory exists
+  ansible.builtin.file:
+    path: "{{ example_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+# --- Example 3: Deploy a config file from a Jinja2 template -----------------
+# The template lives in templates/example.conf.j2
+# Variables inside it are resolved from defaults, vars, or inventory.
+- name: Deploy configuration file
+  ansible.builtin.template:
+    src: example.conf.j2
+    dest: "{{ example_config_dir }}/example.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart example service   # triggers the handler below on change
+
+# --- Example 4: Run a command and capture output ----------------------------
+- name: Check service status
+  ansible.builtin.command: systemctl is-active example.service
+  register: svc_status
+  changed_when: false       # this task never reports "changed"
+  ignore_errors: true       # don't fail the play if the service doesn't exist yet
+
+- name: Show service status
+  ansible.builtin.debug:
+    msg: "Service is: {{ svc_status.stdout }}"
+
+# --- Example 5: Conditional task --------------------------------------------
+- name: Enable and start service (only if package was installed)
+  ansible.builtin.service:
+    name: example.service
+    state: started
+    enabled: true
+  become: true
+  when: svc_status.rc != 0   # only run if service wasn't already active
+
+# --- Example 6: Loop over a list --------------------------------------------
+- name: Create multiple users
+  ansible.builtin.user:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ example_users }}"   # defined in defaults/main.yml
+  become: true

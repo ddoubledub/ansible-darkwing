@@ -1,0 +1,29 @@
+# =============================================================================
+# example.conf.j2  —  Jinja2 template example
+# =============================================================================
+# This file is rendered by Ansible and copied to the target host.
+# Variables ({{ var_name }}) are replaced with their values at deploy time.
+# The source of each variable is searched in this order:
+#   extra-vars → playbook vars → host_vars → group_vars → role vars → role defaults
+#
+# Jinja2 tips:
+#   {{ variable }}              — insert a value
+#   {{ variable | default('x') }} — fallback if undefined
+#   {% if condition %}...{% endif %} — conditional block
+#   {% for item in list %}...{% endfor %} — loop
+# =============================================================================
+
+[main]
+config_dir = {{ example_config_dir }}
+
+# The ansible_hostname fact is automatically gathered by Ansible.
+# Facts give you live data about the target system (OS, IPs, memory, etc.)
+managed_by = ansible
+hostname = {{ ansible_hostname }}
+
+{% if example_users | length > 0 %}
+[users]
+{% for user in example_users %}
+user = {{ user }}
+{% endfor %}
+{% endif %}

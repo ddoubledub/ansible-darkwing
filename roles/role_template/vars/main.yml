@@ -1,0 +1,19 @@
+---
+# =============================================================================
+# vars/main.yml  —  HIGH-PRIORITY variables
+# =============================================================================
+# Variables here override defaults/main.yml and most inventory variables.
+# Use this file for values that should NOT be changed by operators — things
+# that are internal implementation details of this role.
+#
+# Rule of thumb:
+#   defaults/  →  things the user is expected to tune
+#   vars/      →  things that are fixed by the role's design
+#
+# This file is intentionally sparse in the template. Most roles only need
+# defaults/main.yml. Add entries here only when you have a strong reason to
+# prevent override.
+# =============================================================================
+
+# Example: an internal path that the role controls and operators should not change.
+# example_internal_marker_file: /var/lib/example/.installed

@@ -1,0 +1,16 @@
+---
+# =============================================================================
+# handlers/main.yml
+# =============================================================================
+# Handlers are tasks that only run when notified by another task.
+# They run ONCE at the end of the play, even if notified multiple times.
+#
+# Common use: restart a service after its config file changes.
+# A task triggers a handler with:   notify: Handler Name Here
+# =============================================================================
+
+- name: Restart example service
+  ansible.builtin.service:
+    name: example.service
+    state: restarted
+  become: true

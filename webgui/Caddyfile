@@ -1,0 +1,24 @@
+# Caddy reads DOMAIN from the environment (set in .env, passed by docker-compose).
+#
+# TLS options — uncomment the one that fits your setup:
+#   tls internal          → self-signed cert (internal/lab domains, no DNS challenge)
+#   tls /cert /key        → bring your own certificate files
+#   (nothing)             → Let's Encrypt automatic cert (requires public domain + port 80/443 reachable)
+
+{env.DOMAIN} {
+    tls internal
+
+    reverse_proxy localhost:8420
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}
